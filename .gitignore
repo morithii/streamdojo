@@ -1,0 +1,30 @@
+# SAM build output
+.aws-sam/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets and local settings - never commit these
+.env
+*.pem
+samconfig.local.toml
+
+# Terraform (for the Terraform version later)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+
+# Frontend tooling
+node_modules/

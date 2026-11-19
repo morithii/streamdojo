@@ -1,0 +1,80 @@
+# =============================================================================
+# StreamDojo: Netflix-style video learning platform
+# with ClipSensei, the AI teaching assistant (active recall + spaced repetition)
+#
+# Step 1: project skeleton. The only resource is the SNS alerts topic, which
+# later steps (alarms, budget) will publish to. Everything else is added
+# one exercise at a time.
+# =============================================================================
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
+Description: StreamDojo - video learning platform with the ClipSensei AI teaching assistant
+
+# -----------------------------------------------------------------------------
+# Parameters: values that change per environment, passed in at deploy time
+# -----------------------------------------------------------------------------
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Deployment environment, used in resource names
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Email address for alarm and budget alerts (leave empty to skip the subscription)
+
+# -----------------------------------------------------------------------------
+# Conditions: only subscribe an email when one was actually provided
+# -----------------------------------------------------------------------------
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+# -----------------------------------------------------------------------------
+# Globals: defaults applied to every Lambda function and API we add later,
+# so each function definition stays short and consistent
+# -----------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]        # Graviton: about 20% cheaper than x86 for the same work
+    MemorySize: 256
+    Timeout: 30
+    Tracing: Active               # AWS X-Ray traces for every function
+    LoggingConfig:
+      LogFormat: JSON             # structured logs, easy to search in CloudWatch
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        POWERTOOLS_SERVICE_NAME: streamdojo
+  Api:
+    TracingEnabled: true          # X-Ray on the REST API (added in a later step)
+
+# -----------------------------------------------------------------------------
+# Resources
+# -----------------------------------------------------------------------------
+Resources:
+  # Central topic for operational alerts (alarms, budget, failed workflows)
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub streamdojo-${Environment}-alerts
+      KmsMasterKeyId: alias/aws/sns   # encrypt messages at rest with the AWS-managed key
+
+  # Email subscription, created only when AlertEmail is set.
+  # AWS sends a confirmation email that you must click before alerts arrive.
+  AlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+# -----------------------------------------------------------------------------
+# Outputs: values other steps and the README will need
+# -----------------------------------------------------------------------------
+Outputs:
+  AlertsTopicArn:
+    Description: SNS topic that receives StreamDojo alerts
+    Value: !Ref AlertsTopic

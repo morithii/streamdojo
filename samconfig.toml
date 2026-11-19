@@ -1,0 +1,25 @@
+# SAM CLI settings for StreamDojo (dev environment)
+version = 0.1
+
+# Applies to every sam command
+[default.global.parameters]
+stack_name = "streamdojo-dev"
+region = "eu-west-2"
+
+# sam build: reuse unchanged builds and build functions in parallel
+[default.build.parameters]
+cached = true
+parallel = true
+
+# sam validate: also run cfn-lint best-practice checks
+[default.validate.parameters]
+lint = true
+
+# sam deploy
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"  # allow SAM to create IAM roles and expand the transform
+confirm_changeset = true          # show what will change and ask before applying (CI overrides this)
+resolve_s3 = true                 # let SAM manage the S3 bucket for deployment artifacts
+s3_prefix = "streamdojo-dev"
+parameter_overrides = "Environment=\"dev\""
+tags = "Project=\"StreamDojo\" Environment=\"dev\" Owner=\"morithii\""
