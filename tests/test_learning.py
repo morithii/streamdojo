@@ -75,7 +75,7 @@ def test_full_unaided_recall_schedules_first_review_in_one_day_then_three():
     assert body["recalledAll"] is True and body["needsReview"] is False
     schedule = m._clients["table:app"].items[("VIDEO#v1", "LEARNER#u1#OBJ#obj1")]
     assert schedule["intervalDays"] == 1 and schedule["GSI3PK"] == "DUE#u1"
-    m2 = setup_marking(FULL, schedule={**schedule})
+    m2 = setup_marking(FULL, schedule={**schedule, "nextReviewAt": "2020-01-01T00:00:00Z"})   # review is due
     m2.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER, "kind": "REVIEW"}), None)
     assert m2._clients["table:app"].items[("VIDEO#v1", "LEARNER#u1#OBJ#obj1")]["intervalDays"] == 3
 
@@ -133,3 +133,32 @@ def test_learn_api_never_returns_answers_and_rotates_review_prompts():
     assert "modelAnswer" not in json.dumps(practice) and "essentialPoints" not in json.dumps(practice)
     due = json.loads(learn.handler(ev("/learn/reviews/due"), None)["body"])["reviews"]
     assert due[0]["promptIndex"] == 1 and due[0]["prompt"] == "What if someone opens the S3 URL?"
+
+
+FUTURE = "2999-01-01T00:00:00Z"     # a review that is not due yet
+
+
+def test_early_correct_practice_cannot_fast_forward_the_schedule():
+    schedule = {"PK": "VIDEO#v1", "SK": "LEARNER#u1#OBJ#obj1", "intervalDays": 1, "nextReviewAt": FUTURE}
+    m = setup_marking(FULL, schedule=schedule)
+    body = json.loads(m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER}), None)["body"])
+    saved = m._clients["table:app"].items[("VIDEO#v1", "LEARNER#u1#OBJ#obj1")]
+    assert saved["intervalDays"] == 1 and saved["nextReviewAt"] == FUTURE       # unchanged: no cramming
+    assert body["counted"] is False and body["nextReviewAt"] == FUTURE
+    assert m._clients["table:app"].updates == []                                # stats not counted
+
+
+def test_early_forgetting_still_resets_to_one_day():
+    schedule = {"PK": "VIDEO#v1", "SK": "LEARNER#u1#OBJ#obj1", "intervalDays": 7, "nextReviewAt": FUTURE}
+    m = setup_marking(FULL, schedule=schedule)
+    m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "dontRemember": True}), None)
+    saved = m._clients["table:app"].items[("VIDEO#v1", "LEARNER#u1#OBJ#obj1")]
+    assert saved["intervalDays"] == 1 and saved["nextReviewAt"] != FUTURE
+
+
+def test_first_practice_is_counted_in_the_educator_stats():
+    m = setup_marking(FULL)
+    body = json.loads(m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER}), None)["body"])
+    assert body["counted"] is True
+    update = m._clients["table:app"].updates[0]
+    assert update["Key"]["SK"] == "STATS#obj1" and update["ExpressionAttributeValues"][":full"] == 1

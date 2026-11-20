@@ -11,6 +11,7 @@
 #   Steps 8-9 - Transcribe (English subtitles + clean transcript) -> Translate (fr, es, it, el)
 #   Steps 10-11 - ClipSensei (Bedrock) drafts learning objectives -> educator review + publish API
 #   Steps 12-13 - learner practice (active recall), ClipSensei marking with evidence checks, spaced repetition
+#   Step 14 - educator insights: what's sticking, what isn't, who needs help (+ ClipSensei summary)
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -822,6 +823,47 @@ Resources:
           Properties:
             RestApiId: !Ref StreamDojoApi
             Path: /learn/hint/{videoId}/{objectiveId}
+            Method: get
+
+  # ===========================================================================
+  # Step 14: educator insights - read-only numbers + a ClipSensei summary
+  # ===========================================================================
+  InsightsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-insights
+      CodeUri: src/insights/
+      Handler: app.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          KEYS_TABLE_NAME: !Ref AnswerKeysTable
+          MODEL_ID: !Ref GenerationModelId
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadLessonStatsAndSchedules     # read only: Query on the main table
+              Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt AppTable.Arn
+            - Sid: ReadEssentialPointWording       # read only: Query on the answer keys
+              Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt AnswerKeysTable.Arn
+            - Sid: InvokeSummaryModel
+              Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${GenerationModelId}
+                - arn:aws:bedrock:*::foundation-model/anthropic.*
+      Events:
+        LessonInsights:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /insights/lessons/{videoId}
             Method: get
 
 # -----------------------------------------------------------------------------

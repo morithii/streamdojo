@@ -9,8 +9,13 @@ Reliable marking:
   * Code then checks every quote really appears in the answer. Invented evidence, low
     confidence or a suspiciously short answer => needsReview (educator review queue).
   * The learner's answer is passed as data inside <answer> tags, never as instructions.
-Spaced repetition: only the first unaided attempt moves the schedule (1 -> 3 -> 7 -> 14 -> 30 days);
-a miss, a hint or "I don't remember" sends the idea back to 1 day.
+Spaced repetition (1 -> 3 -> 7 -> 14 -> 30 days):
+  * Only a COUNTED attempt can move an idea up the ladder: the learner's first practice of it,
+    or a review once it is due. Practising again early can't fast-forward the schedule (no cramming).
+  * Forgetting always counts: a miss, a hint or "I don't remember" sends the idea back to 1 day,
+    even when the attempt was early.
+  * A retry ("try again" straight after seeing feedback) never touches the schedule.
+  * Educator recall stats are only counted on counted attempts, so they measure real recall.
 """
 import json
 import os
@@ -205,20 +210,27 @@ def submit_attempt(user_id, display_name, body):
         attempt.update({"GSI2PK": "REVIEWQUEUE", "GSI2SK": iso(now)})
     table(TABLE_NAME).put_item(Item=attempt)
 
-    next_review = None
-    if not is_retry:                                         # only the first try at a prompt moves the schedule
+    next_review, counted = None, False
+    if not is_retry:                                         # a retry never touches the schedule
         schedule_key = {"PK": f"VIDEO#{video_id}", "SK": f"LEARNER#{user_id}#OBJ#{objective_id}"}
         current = table(TABLE_NAME).get_item(Key=schedule_key).get("Item", {})
         previous = int(current["intervalDays"]) if "intervalDays" in current else None
-        interval = next_interval(previous, recalled_all and unaided)
-        next_review = iso(now + timedelta(days=interval))
-        table(TABLE_NAME).put_item(Item={
-            **schedule_key, "learnerSub": user_id, "displayName": display_name, "videoId": video_id,
-            "objectiveId": objective_id, "topicId": lesson.get("topicId"), "intervalDays": interval,
-            "nextReviewAt": next_review, "lastPromptIndex": prompt_index,
-            "lastResult": "UNAIDED_FULL" if recalled_all and unaided else "NEEDS_PRACTICE",
-            "GSI3PK": f"DUE#{user_id}", "GSI3SK": next_review,
-        })
+        success = recalled_all and unaided
+        # Counted = first practice of this idea, or a review that is now due (ISO strings sort by time)
+        counted = "nextReviewAt" not in current or current["nextReviewAt"] <= iso(now)
+        if counted or not success:                           # early success changes nothing; early forgetting resets
+            interval = next_interval(previous, success) if counted else INTERVALS[0]
+            next_review = iso(now + timedelta(days=interval))
+            table(TABLE_NAME).put_item(Item={
+                **schedule_key, "learnerSub": user_id, "displayName": display_name, "videoId": video_id,
+                "objectiveId": objective_id, "topicId": lesson.get("topicId"), "intervalDays": interval,
+                "nextReviewAt": next_review, "lastPromptIndex": prompt_index,
+                "lastResult": "UNAIDED_FULL" if success else "NEEDS_PRACTICE",
+                "GSI3PK": f"DUE#{user_id}", "GSI3SK": next_review,
+            })
+        else:
+            next_review = current["nextReviewAt"]            # early and correct: keep the date it already had
+    if counted:
         # Recall stats for the educator, counted on write (one atomic update, no scans later)
         missed = [r["pointId"] for r in results if r["verdict"] != "covered"]
         expression = "ADD attempts :one, unaidedFull :full, hintsUsed :hint, dontRemember :dr"
@@ -232,7 +244,7 @@ def submit_attempt(user_id, display_name, body):
     return response(200, {
         "pointResults": results, "recalledAll": recalled_all, "feedback": feedback,
         "modelAnswer": key["modelAnswer"], "rewatchAt": obj["timestamp"],
-        "nextReviewAt": next_review, "needsReview": needs_review,
+        "nextReviewAt": next_review, "needsReview": needs_review, "counted": counted,
     })
 
 
