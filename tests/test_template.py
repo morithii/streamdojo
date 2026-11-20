@@ -130,3 +130,25 @@ def test_insights_is_read_only():
     statements = load_template()["Resources"]["InsightsFunction"]["Properties"]["Policies"][0]["Statement"]
     dynamo = [s["Action"] for s in statements if "dynamodb" in str(s["Action"])]
     assert dynamo == ["dynamodb:Query", "dynamodb:Query"]       # no Put/Update/Delete anywhere
+
+def test_site_and_media_are_private_and_served_through_cloudfront_oac():
+    resources = load_template()["Resources"]
+    assert all(resources["SiteBucket"]["Properties"]["PublicAccessBlockConfiguration"].values())
+    origins = {o["Id"]: o for o in resources["SiteDistribution"]["Properties"]["DistributionConfig"]["Origins"]}
+    assert "OriginAccessControlId" in origins["site"] and "OriginAccessControlId" in origins["media"]
+    assert origins["api"]["CustomOriginConfig"]["OriginProtocolPolicy"] == "https-only"
+
+
+def test_cloudfront_can_only_read_player_files_from_the_media_bucket():
+    statements = load_template()["Resources"]["ProcessedBucketPolicy"]["Properties"]["PolicyDocument"]["Statement"]
+    allow = [s for s in statements if s["Sid"] == "AllowCloudFrontPlayerFilesOnly"][0]
+    resources = str(allow["Resource"])
+    assert "/hls/" in resources and "thumb" in resources and "subtitles." in resources
+    assert "audio" not in resources and "clean.json" not in resources and "/transcript/*" not in resources
+    assert "AWS:SourceArn" in allow["Condition"]["StringEquals"]
+
+
+def test_api_responses_are_never_cached_by_cloudfront():
+    behaviours = load_template()["Resources"]["SiteDistribution"]["Properties"]["DistributionConfig"]["CacheBehaviors"]
+    api = [b for b in behaviours if b["PathPattern"] == "/api/*"][0]
+    assert api["CachePolicyId"] == "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"     # Managed-CachingDisabled

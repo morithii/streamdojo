@@ -12,6 +12,7 @@
 #   Steps 10-11 - ClipSensei (Bedrock) drafts learning objectives -> educator review + publish API
 #   Steps 12-13 - learner practice (active recall), ClipSensei marking with evidence checks, spaced repetition
 #   Step 14 - educator insights: what's sticking, what isn't, who needs help (+ ClipSensei summary)
+#   Step 15 - website hosting: one CloudFront address for the site (/), the API (/api) and media (/media), catalogue API
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -136,8 +137,9 @@ Resources:
       AllowedOAuthFlows: [code]
       AllowedOAuthScopes: [openid, email, profile]
       SupportedIdentityProviders: [COGNITO]
-      CallbackURLs: [!Sub "${FrontendUrl}/"]
-      LogoutURLs: [!Sub "${FrontendUrl}/"]
+      # Sign-in may only return to local development or our CloudFront site (Step 15)
+      CallbackURLs: [!Sub "${FrontendUrl}/", !Sub "https://${SiteDistribution.DomainName}/"]
+      LogoutURLs: [!Sub "${FrontendUrl}/", !Sub "https://${SiteDistribution.DomainName}/"]
       # USER_PASSWORD_AUTH lets us get a token from the CLI for testing - dev only
       ExplicitAuthFlows: !If
         - IsDev
@@ -436,6 +438,20 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: "false"
+          # Step 15: CloudFront (and only our distribution) may read what the player needs -
+          # HLS video, thumbnails and subtitle files. Audio, raw transcripts and clean.json stay private.
+          - Sid: AllowCloudFrontPlayerFilesOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource:
+              - !Sub ${ProcessedBucket.Arn}/processed/*/hls/*
+              - !Sub ${ProcessedBucket.Arn}/processed/*/thumb*
+              - !Sub ${ProcessedBucket.Arn}/processed/*/transcript/subtitles.*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}
 
   # The role MediaConvert itself uses: read originals from raw/, write results to processed/
   MediaConvertRole:
@@ -866,6 +882,175 @@ Resources:
             Path: /insights/lessons/{videoId}
             Method: get
 
+  # ===========================================================================
+  # Step 15: website hosting - ONE CloudFront address serves everything:
+  #   /          the website (private S3 bucket, via OAC)
+  #   /api/*     the REST API (same origin, so the browser needs no CORS)
+  #   /media/*   video, thumbnails, subtitles (private media bucket, via OAC)
+  # ===========================================================================
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub streamdojo-${Environment}-site-${AWS::AccountId}
+      PublicAccessBlockConfiguration:       # never public: only CloudFront can read it
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt SiteBucket.Arn
+              - !Sub ${SiteBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: AllowOurCloudFrontOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${SiteBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}
+
+  # Origin Access Control: CloudFront signs its requests to S3 (SigV4), so the buckets stay private.
+  # One OAC can be shared by both S3 origins.
+  SiteOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub streamdojo-${Environment}-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Removes the /api or /media prefix before the request reaches its origin:
+  #   /api/catalogue                  -> API Gateway  /dev/catalogue   (OriginPath adds /dev)
+  #   /media/processed/x/hls/a.m3u8   -> media bucket processed/x/hls/a.m3u8
+  StripPrefixFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub streamdojo-${Environment}-strip-prefix
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Strip /api or /media from the path
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          request.uri = request.uri.replace(/^\/(api|media)(?=\/|$)/, '') || '/';
+          return request;
+        }
+
+  SiteDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub StreamDojo ${Environment} - site, API and media
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100          # Europe + North America edges only: cheapest
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SiteOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""      # empty = use OAC, not the legacy OAI
+          - Id: media
+            DomainName: !GetAtt ProcessedBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SiteOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: api
+            DomainName: !Sub ${StreamDojoApi}.execute-api.${AWS::Region}.amazonaws.com
+            OriginPath: !Sub /${Environment}
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:               # the website itself
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6          # Managed-CachingOptimized
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy (HSTS, nosniff...)
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # Managed-CachingDisabled: never cache personal data
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # Managed-AllViewerExceptHostHeader: passes the Authorization header
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt StripPrefixFunction.FunctionMetadata.FunctionARN
+          - PathPattern: /media/*
+            TargetOriginId: media
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6          # video segments never change: cache hard
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt StripPrefixFunction.FunctionMetadata.FunctionARN
+
+  # Read-only catalogue API for the home page and the player
+  CatalogueFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-catalogue
+      CodeUri: src/catalogue/
+      Handler: app.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadPublishedCatalogue
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt AppTable.Arn
+                - !Sub ${AppTable.Arn}/index/GSI1
+      Events:
+        ListCatalogue:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /catalogue
+            Method: get
+        GetLesson:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /catalogue/{videoId}
+            Method: get
+
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need
 # -----------------------------------------------------------------------------
@@ -901,3 +1086,15 @@ Outputs:
   ProcessVideoStateMachineArn:
     Description: The video processing workflow
     Value: !Ref ProcessVideoStateMachine
+  SiteUrl:
+    Description: The StreamDojo website (open this in a browser)
+    Value: !Sub https://${SiteDistribution.DomainName}
+  SiteBucketName:
+    Description: Bucket the pipeline uploads the website to
+    Value: !Ref SiteBucket
+  SiteDistributionId:
+    Description: CloudFront distribution to invalidate after each website upload
+    Value: !Ref SiteDistribution
+  CognitoDomain:
+    Description: Cognito hosted sign-in domain the website redirects to
+    Value: !Sub ${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com

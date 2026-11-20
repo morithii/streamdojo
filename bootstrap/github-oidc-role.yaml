@@ -4,7 +4,8 @@
 # Deployed ONCE, by hand, from your laptop (not by the pipeline itself).
 # Creates:
 #   1. (optional) the GitHub OIDC identity provider - only one per account
-#   2. GitHubDeployRole   - assumed by GitHub Actions; can ONLY drive CloudFormation
+#   2. GitHubDeployRole   - assumed by GitHub Actions; drives CloudFormation and
+#                           publishes the website (site bucket + CloudFront invalidation only)
 #   3. CloudFormationExecutionRole - assumed by CloudFormation; creates the actual resources
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
@@ -107,6 +108,21 @@ Resources:
                 Resource:
                   - arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*
                   - arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*/*
+              # Step 15: publish the website after each deploy - upload to the site bucket
+              # (and nothing else) and clear CloudFront's cache so visitors get the new version
+              - Sid: PublishWebsiteFiles
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - arn:aws:s3:::streamdojo-*-site-*
+                  - arn:aws:s3:::streamdojo-*-site-*/*
+              - Sid: RefreshWebsiteCache
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/*
               - Sid: PassExecutionRoleToCloudFormation
                 Effect: Allow
                 Action: iam:PassRole
