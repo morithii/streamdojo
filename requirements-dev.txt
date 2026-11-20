@@ -1,0 +1,4 @@
+# Tools used by the CI pipeline and for local testing (not deployed to Lambda)
+pytest==8.3.4
+cfn-lint==1.22.2
+PyYAML==6.0.2

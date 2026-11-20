@@ -1,0 +1,157 @@
+# =============================================================================
+# StreamDojo bootstrap: lets GitHub Actions deploy to AWS without access keys.
+# Deployed ONCE, by hand. Creates:
+#   1. (optional) the GitHub OIDC identity provider - only one per account
+#   2. GitHubDeployRole   - assumed by GitHub Actions; can ONLY drive CloudFormation
+#   3. CloudFormationExecutionRole - assumed by CloudFormation; creates the actual resources
+# =============================================================================
+AWSTemplateFormatVersion: "2010-09-09"
+Description: StreamDojo - GitHub Actions OIDC deploy role and CloudFormation execution role
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: morithii
+  RepositoryName:
+    Type: String
+    Default: streamdojo
+  Branch:
+    Type: String
+    Default: main
+  CreateOIDCProvider:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Set to true only if this account has no GitHub OIDC provider yet
+
+Conditions:
+  ShouldCreateProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+  # 1. GitHub's identity provider: lets AWS trust tokens signed by GitHub
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  # 2. Role GitHub Actions assumes: can only drive CloudFormation for streamdojo-* stacks
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: streamdojo-github-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                # token must be meant for AWS STS, and come from THIS repo's main branch only
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${RepositoryName}:ref:refs/heads/${Branch}
+      Policies:
+        - PolicyName: sam-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageStreamDojoStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:ListStackResources
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/streamdojo-*/*
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/aws-sam-cli-managed-default/*
+              - Sid: UseSamTransform
+                Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+              - Sid: ValidateTemplates    # these actions don't support resource-level restrictions
+                Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:GetTemplateSummary
+                Resource: "*"
+              - Sid: SamArtifactBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*
+                  - arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*/*
+              - Sid: PassExecutionRoleToCloudFormation
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+
+  # 3. Role CloudFormation uses to create resources: everything except IAM,
+  #    plus IAM only for roles named streamdojo-*
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: streamdojo-cfn-execution
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: streamdojo-roles-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageStreamDojoRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/streamdojo-*
+              - Sid: ServiceLinkedRoles   # some services create these on first use
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*
+
+Outputs:
+  GitHubDeployRoleArn:
+    Description: Store as the GitHub secret AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt GitHubDeployRole.Arn
+  CloudFormationExecutionRoleArn:
+    Description: Store as the GitHub secret AWS_CFN_EXEC_ROLE_ARN
+    Value: !GetAtt CloudFormationExecutionRole.Arn
