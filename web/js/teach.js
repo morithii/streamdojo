@@ -191,11 +191,16 @@ export async function renderReview(app, videoId) {
   // Lesson title: the uploader's title may not match what the video teaches
   const titleInput = el("input", { value: lesson.title || "", className: "title-input", ariaLabel: "Lesson title" });
   const titleStatus = el("span", { className: "status", role: "status" });
+  // Place in the course: blank = in the order lessons were published
+  const positionInput = el("input", { type: "number", min: 1, max: 999, className: "short", placeholder: "auto",
+                                      value: lesson.position ?? "", ariaLabel: "Lesson number in the course" });
   const saveTitle = async () => {
     titleStatus.textContent = "Saving…";
+    const body = { title: titleInput.value };
+    if (positionInput.value) body.position = Number(positionInput.value);
     try {
-      await api(`/lessons/${enc(videoId)}`, { method: "PUT", body: { title: titleInput.value } });
-      titleStatus.textContent = "Title saved.";
+      await api(`/lessons/${enc(videoId)}`, { method: "PUT", body });
+      titleStatus.textContent = "Saved.";
     } catch (error) {
       titleStatus.textContent = error.message;
     }
@@ -210,7 +215,11 @@ export async function renderReview(app, videoId) {
       el("a", { className: "back", href: "#/teach" }, "← Educator dashboard"),
       el("p", { className: "eyebrow" }, isDraft ? "Review ClipSensei's draft" : "Edit live objectives"),
       el("div", { className: "row-input" }, titleInput,
-        el("button", { className: "btn ghost", onclick: saveTitle }, "Save title")),
+        el("button", { className: "btn ghost", onclick: saveTitle }, "Save")),
+      el("label", { className: "field position-field" },
+        el("span", {}, `Lesson number in ${lesson.topicName ? `"${lesson.topicName}"` : "its course"}`),
+        positionInput,
+        el("small", {}, "Leave blank to keep the order lessons were published in. Lower numbers come first.")),
       titleStatus,
       suggestion,
       sensei(isDraft

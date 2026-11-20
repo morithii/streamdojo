@@ -162,3 +162,22 @@ def test_first_practice_is_counted_in_the_educator_stats():
     assert body["counted"] is True
     update = m._clients["table:app"].updates[0]
     assert update["Key"]["SK"] == "STATS#obj1" and update["ExpressionAttributeValues"][":full"] == 1
+
+
+def test_progress_counts_practised_ideas_per_lesson():
+    learn = load("learn")
+    class Pages:
+        def __init__(self): self.calls = 0
+        def query(self, **kwargs):
+            self.calls += 1
+            assert kwargs["IndexName"] == "GSI3" and "KeyConditionExpression" in kwargs
+            if self.calls == 1:
+                return {"Items": [{"videoId": "v1"}, {"videoId": "v1"}], "LastEvaluatedKey": {"x": 1}}
+            return {"Items": [{"videoId": "v2"}, {"SK": "no-video"}]}
+    learn._table = None
+    learn.table = lambda: pages
+    pages = Pages()
+    res = learn.handler({"httpMethod": "GET", "resource": "/learn/progress", "pathParameters": None,
+                         "requestContext": {"authorizer": {"claims": {"sub": "u1", "cognito:groups": "learners"}}}}, None)
+    assert json.loads(res["body"]) == {"practised": {"v1": 2, "v2": 1}} and pages.calls == 2
+

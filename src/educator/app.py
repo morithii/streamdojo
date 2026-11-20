@@ -2,7 +2,7 @@
 
 GET  /lessons?status=DRAFT                            lessons waiting for review (oldest first)
 GET  /lessons/{videoId}/objectives                    objectives with prompts AND answer keys
-PUT  /lessons/{videoId}                 {"title": ...}  rename the lesson
+PUT  /lessons/{videoId}     {"title": ..., "position": n}   rename the lesson and/or set its place in the course
 PUT  /lessons/{videoId}/objectives/{objectiveId}      save the educator's edits
 POST /lessons/{videoId}/objectives                    add an objective ClipSensei didn't pick (max 5)
 DELETE /lessons/{videoId}/objectives/{objectiveId}    remove a weak draft objective (drafts only, keep at least 1)
@@ -76,6 +76,7 @@ def get_objectives(video_id):
                            "essentialPoints": k.get("essentialPoints", []), "modelAnswer": k.get("modelAnswer"),
                            "hint": k.get("hint")})
     return response(200, {"videoId": video_id, "title": lesson.get("title"), "suggestedTitle": lesson.get("suggestedTitle"),
+                          "position": lesson.get("position"), "topicName": lesson.get("topicName"),
                           "objectivesStatus": lesson.get("objectivesStatus"), "objectives": objectives})
 
 
@@ -113,6 +114,18 @@ def update_objective(video_id, objective_id, body, user_id):
 
 
 def rename_lesson(video_id, body, user_id):
+    if "position" in body:                          # place in the course curriculum: 1 = first lesson
+        position = body["position"]
+        if not isinstance(position, int) or isinstance(position, bool) or not 1 <= position <= 999:
+            return response(400, {"message": "position must be a whole number from 1 to 999"})
+        lesson_key = {"PK": f"VIDEO#{video_id}", "SK": "META"}
+        if "Item" not in table(TABLE_NAME).get_item(Key=lesson_key):
+            return response(404, {"message": "Lesson not found"})
+        table(TABLE_NAME).update_item(Key=lesson_key, UpdateExpression="SET #p = :p",
+                                      ExpressionAttributeNames={"#p": "position"},     # "position" is a reserved word
+                                      ExpressionAttributeValues={":p": position})
+        if "title" not in body:
+            return response(200, {"message": "Moved", "position": position})
     title = str(body.get("title", "")).strip()
     if not 3 <= len(title) <= 120:
         return response(400, {"message": "title must be 3-120 characters"})

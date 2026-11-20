@@ -239,3 +239,13 @@ def test_clipsensei_suggests_a_title():
     gen.handler({"videoId": "v1"}, None)
     assert app.items[("VIDEO#v1", "META")]["suggestedTitle"] == "Keeping S3 private with OAC"
 
+
+def test_educator_sets_a_lessons_place_in_the_course():
+    edu, app, _ = setup_educator(objectives_status="PUBLISHED")
+    route = "/lessons/{videoId}"
+    ok = edu.handler(educator_event("educators", "PUT", route, {"videoId": "v1"}, {"position": 2}), None)
+    assert ok["statusCode"] == 200 and app.items[("VIDEO#v1", "META")]["position"] == 2
+    for bad in (0, 1000, "2", True):
+        res = edu.handler(educator_event("educators", "PUT", route, {"videoId": "v1"}, {"position": bad}), None)
+        assert res["statusCode"] == 400
+

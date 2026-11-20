@@ -816,6 +816,12 @@ Resources:
             RestApiId: !Ref StreamDojoApi
             Path: /learn/reviews/due
             Method: get
+        Progress:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/progress
+            Method: get
 
   # ClipSensei marking: the only learner-facing function that may read answer keys
   MarkingFunction:

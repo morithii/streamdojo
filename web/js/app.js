@@ -1,7 +1,8 @@
 // =============================================================================
 // StreamDojo web app. Pages are chosen by the part of the address after "#":
-//   #/                 home: reviews due + catalogue rows
-//   #/watch/<id>       the player with subtitles
+//   #/                 My courses (see courses.js)
+//   #/course/<topic>   a course's curriculum: lessons 1, 2, 3...
+//   #/watch/<id>       a lesson: player + course sidebar + previous/next
 //   #/practise/<id>    practise a lesson with ClipSensei (active recall)
 //   #/reviews          today's spaced-repetition reviews
 //   #/create           upload lessons and follow them through the pipeline (see create.js)
@@ -14,11 +15,11 @@ import { attachStream, stopPlayer } from "./player.js";
 import { runPractice } from "./practice.js";
 import { renderTeach, renderReview, renderInsights } from "./teach.js";
 import { renderCreate } from "./create.js";
+import { renderHome, renderCourse, loadCourses, curriculum, progressBar, watchHref } from "./courses.js";
 
 const app = document.getElementById("app");
 const account = document.getElementById("account");
 const go = (hash) => () => { location.hash = hash; };
-const watch = (videoId) => go(`#/watch/${encodeURIComponent(videoId)}`);
 
 // Top-right navigation: one button per role the user has, then Sign out.
 // Everyone signed in can learn; Creator and Educator appear only for those Cognito groups.
@@ -56,22 +57,8 @@ function renderLanding() {
 }
 
 // ---------------------------------------------------------------------------
-// Home
+// Reviews due (shown on My courses)
 // ---------------------------------------------------------------------------
-function lessonCard(lesson) {
-  const open = watch(lesson.videoId);
-  return el("article", {
-    className: "card", tabIndex: 0, title: lesson.title, role: "link", onclick: open,
-    onkeydown: (e) => { if (e.key === "Enter") open(); },     // keyboard users can open it too
-  },
-    lesson.thumbnailUrl ? el("img", { src: lesson.thumbnailUrl, alt: "", loading: "lazy" }) : el("div", { className: "thumb-missing" }),
-    el("div", { className: "card-text" },
-      el("h3", {}, lesson.title || "Untitled lesson"),
-      el("p", {}, formatDuration(lesson.durationMs)),
-    ),
-  );
-}
-
 function reviewsBanner(reviews) {
   if (!reviews.length) return null;
   return el("section", { className: "due" },
@@ -80,45 +67,6 @@ function reviewsBanner(reviews) {
       el("p", {}, "A quick recall now, right as it starts to fade, is what moves an idea into long-term memory."),
     ),
     el("button", { className: "btn big", onclick: go("#/reviews") }, "Start reviews"),
-  );
-}
-
-async function renderHome() {
-  const [{ featured, rows }, { reviews }] = await Promise.all([api("/catalogue"), api("/learn/reviews/due")]);
-  if (!featured) {
-    app.replaceChildren(
-      reviewsBanner(reviews) || "",
-      el("p", { className: "empty" }, "No lessons published yet. Educators publish lessons once ClipSensei's objectives are reviewed."),
-    );
-    return;
-  }
-  const open = watch(featured.videoId);
-  // The featured lesson is shown once, big, in the middle - so the rows below list the OTHER lessons
-  const otherRows = rows
-    .map((row) => ({ ...row, lessons: row.lessons.filter((l) => l.videoId !== featured.videoId) }))
-    .filter((row) => row.lessons.length);
-  app.replaceChildren(
-    reviewsBanner(reviews) || "",
-    el("section", { className: "feature" },
-      el("div", { className: "feature-main" },
-        el("button", { className: "feature-video", onclick: open, ariaLabel: `Watch ${featured.title}` },
-          featured.thumbnailUrl ? el("img", { src: featured.thumbnailUrl, alt: "" }) : el("div", { className: "thumb-missing" }),
-          el("span", { className: "play", ariaHidden: "true" }, "▶"),
-        ),
-        el("p", { className: "eyebrow" }, featured.topicName || "New lesson"),
-        el("h1", {}, featured.title),
-        el("p", { className: "meta" }, `${formatDuration(featured.durationMs)} · watch, then practise with ClipSensei`),
-      ),
-      sensei(reviews.length
-        ? `Welcome back. ${reviews.length} idea${reviews.length === 1 ? " is" : "s are"} ready for review.`
-        : "Pick a lesson, watch closely, then show me what you have learned.", "large"),
-    ),
-    ...otherRows.map((row) =>
-      el("section", { className: "row" },
-        el("h2", {}, `More in ${row.topicName}`),
-        el("div", { className: "row-cards" }, ...row.lessons.map(lessonCard)),
-      ),
-    ),
   );
 }
 
@@ -132,7 +80,11 @@ function showSubtitles(video, lang) {
 }
 
 async function renderWatch(videoId) {
-  const lesson = await api(`/catalogue/${encodeURIComponent(videoId)}`);
+  const [lesson, courses] = await Promise.all([api(`/catalogue/${encodeURIComponent(videoId)}`), loadCourses()]);
+  const course = courses.find((c) => c.lessons.some((l) => l.videoId === videoId));
+  const index = course ? course.lessons.findIndex((l) => l.videoId === videoId) : -1;
+  const previous = index > 0 ? course.lessons[index - 1] : null;
+  const next = course && index < course.lessons.length - 1 ? course.lessons[index + 1] : null;
   const video = el("video", { controls: true, playsInline: true, preload: "metadata", poster: lesson.thumbnailUrl || "" });
   for (const sub of lesson.subtitles) {
     video.append(el("track", { kind: "subtitles", src: sub.url, srclang: sub.lang, label: sub.label, default: sub.lang === "en" }));
@@ -148,18 +100,31 @@ async function renderWatch(videoId) {
     practise.focus();
   });
 
+  // Lesson page: player and actions on the left, the course's curriculum on the right
   app.replaceChildren(
-    el("section", { className: "watch" },
-      el("a", { className: "back", href: "#/" }, "← All lessons"),
-      el("div", { className: "player frame" }, video),
-      el("div", { className: "watch-bar" },
-        el("div", {},
-          el("p", { className: "eyebrow" }, lesson.topicName || ""),
-          el("h1", {}, lesson.title),
-          el("p", { className: "meta" }, `${formatDuration(lesson.durationMs)} · ${lesson.objectiveCount || 0} key idea${lesson.objectiveCount === 1 ? "" : "s"} to practise`),
+    el("section", { className: "lesson-page" },
+      el("div", { className: "lesson-main" },
+        el("a", { className: "back", href: course ? `#/course/${encodeURIComponent(course.topicId)}` : "#/" },
+          `← ${course ? course.topicName : "My courses"}`),
+        el("div", { className: "player frame" }, video),
+        el("div", { className: "watch-bar" },
+          el("div", {},
+            el("p", { className: "eyebrow" }, index >= 0 ? `Lesson ${index + 1} of ${course.lessons.length}` : lesson.topicName || ""),
+            el("h1", {}, lesson.title),
+            el("p", { className: "meta" }, `${formatDuration(lesson.durationMs)} · ${lesson.objectiveCount || 0} key idea${lesson.objectiveCount === 1 ? "" : "s"} to practise`),
+          ),
+          el("div", { className: "watch-actions" }, el("label", {}, "Subtitles ", picker), practise, coach),
         ),
-        el("div", { className: "watch-actions" }, el("label", {}, "Subtitles ", picker), practise, coach),
+        el("nav", { className: "lesson-nav", ariaLabel: "Lesson navigation" },
+          previous ? el("a", { className: "btn ghost", href: watchHref(previous.videoId) }, `← Lesson ${index}: ${previous.title}`) : el("span"),
+          next ? el("a", { className: "btn", href: watchHref(next.videoId) }, `Next: Lesson ${index + 2} →`) : el("span"),
+        ),
       ),
+      course ? el("aside", { className: "lesson-aside" },
+        el("h2", {}, "Course content"),
+        progressBar(course.doneCount, course.lessonCount),
+        curriculum(course, videoId),
+      ) : null,
     ),
   );
   attachStream(video, lesson.hlsUrl);
@@ -173,7 +138,7 @@ async function renderWatch(videoId) {
 async function renderPractise(videoId) {
   const lesson = await api(`/learn/lessons/${encodeURIComponent(videoId)}/practice`);
   const queue = lesson.prompts.map((p) => ({ ...p, videoId }));
-  runPractice(app, { queue, kind: "PRACTICE", heading: `Practise: ${lesson.title}` });
+  runPractice(app, { queue, kind: "PRACTICE", heading: `Practise: ${lesson.title}`, doneHref: watchHref(videoId), doneLabel: "Back to the lesson" });
 }
 
 async function renderReviews() {
@@ -195,6 +160,7 @@ async function route() {
   try {
     if (!currentUser()) return renderLanding();
     const [, page, id, sub] = location.hash.split("/");     // "#/watch/abc" -> ["#", "watch", "abc"]
+    if (page === "course" && id) return await renderCourse(app, decodeURIComponent(id));
     if (page === "watch" && id) return await renderWatch(decodeURIComponent(id));
     if (page === "practise" && id) return await renderPractise(decodeURIComponent(id));
     if (page === "reviews") return await renderReviews();
@@ -202,7 +168,7 @@ async function route() {
     if (page === "teach" && id === "insights" && sub) return await renderInsights(app, decodeURIComponent(sub));
     if (page === "teach") return await renderTeach(app);
     if (page === "create") return await renderCreate(app, currentUser());
-    return await renderHome();
+    return await renderHome(app, reviewsBanner);
   } catch (error) {
     renderError(error);
   }

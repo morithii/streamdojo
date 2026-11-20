@@ -48,12 +48,19 @@ def event(resource, params=None, groups="learners"):
             "requestContext": {"authorizer": {"claims": {"sub": "u1", "cognito:groups": groups}}}}
 
 
-def test_home_groups_lessons_into_topic_rows_newest_first():
-    body = json.loads(setup().handler(event("/catalogue"), None)["body"])
-    assert body["featured"]["videoId"] == "v3"
-    assert [r["topicId"] for r in body["rows"]] == ["cdn", "careers"]
-    assert [l["videoId"] for l in body["rows"][0]["lessons"]] == ["v3", "v1"]
-    assert body["featured"]["thumbnailUrl"] == "/media/processed/v3/thumb.0000000.jpg"
+def test_courses_list_lessons_in_order_and_number_them():
+    m = load("catalogue")
+    m._tables = {"app": FakeTable([
+        lesson("a", "cdn", publishedAt="2026-11-20T10:00:00Z"),
+        lesson("b", "cdn", publishedAt="2026-11-20T09:00:00Z"),               # published first -> lesson 1
+        lesson("c", "cdn", publishedAt="2026-11-20T11:00:00Z", position=1),   # an educator moved it to the front
+        lesson("d", "careers", publishedAt="2026-11-20T08:00:00Z")])}
+    body = json.loads(m.handler(event("/catalogue"), None)["body"])
+    assert [r["topicId"] for r in body["rows"]] == ["careers", "cdn"]                  # courses A-Z
+    cdn = body["rows"][1]
+    assert [l["videoId"] for l in cdn["lessons"]] == ["c", "b", "a"]
+    assert [l["lessonNumber"] for l in cdn["lessons"]] == [1, 2, 3] and cdn["lessonCount"] == 3
+    assert body["rows"][1]["lessons"][0]["thumbnailUrl"] == "/media/processed/c/thumb.0000000.jpg"
 
 
 def test_lesson_has_stream_and_subtitles_english_first():

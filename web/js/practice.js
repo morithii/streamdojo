@@ -22,7 +22,7 @@ const VERDICTS = {
 
 // Run a list of questions one after another, then show a summary.
 //   queue: [{ videoId, objectiveId, promptIndex, prompt, timestamp, title? }]
-export function runPractice(app, { queue, kind, heading }) {
+export function runPractice(app, { queue, kind, heading, doneHref = "#/", doneLabel = "Back to my courses" }) {
   const firstTries = [];      // one result per question: the first attempt only (retries never count)
   let index = 0;
 
@@ -174,7 +174,7 @@ export function runPractice(app, { queue, kind, heading }) {
           ? `Every key idea recalled. Well done.`
           : `${full} of ${answered.length} ${noun} fully recalled on the first try.`),
         el("p", { className: "meta" }, "Ideas you missed come back tomorrow; ideas you recalled come back later and later (1 → 3 → 7 → 14 → 30 days)."),
-        el("a", { className: "btn", href: "#/" }, "Back to lessons"),
+        el("a", { className: "btn", href: doneHref }, doneLabel),
       ),
     );
   }

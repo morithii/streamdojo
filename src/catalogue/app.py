@@ -1,6 +1,6 @@
 """Catalogue API - the Netflix-style home page and the lesson player. Read-only.
 
-GET /catalogue              published lessons, newest first, grouped into one row per topic
+GET /catalogue              courses (one per topic), each with its lessons IN ORDER: 1, 2, 3...
 GET /catalogue/{videoId}    one published lesson: video stream, subtitle tracks, thumbnail
 
 Any signed-in user (learners, educators, creators). Only PUBLISHED lessons are ever returned.
@@ -47,7 +47,14 @@ def card(item):
     """What a thumbnail tile on the home page needs - nothing more."""
     return {"videoId": item["videoId"], "title": item.get("title"), "topicId": item.get("topicId"),
             "topicName": item.get("topicName"), "durationMs": item.get("durationMs"),
-            "thumbnailUrl": media_url(item.get("thumbnailPath")), "publishedAt": item.get("publishedAt")}
+            "thumbnailUrl": media_url(item.get("thumbnailPath")), "publishedAt": item.get("publishedAt"),
+            "position": item.get("position")}
+
+
+def lesson_order(lesson):
+    """An educator-set position wins; otherwise lessons follow the order they were published."""
+    position = lesson.get("position")
+    return (int(position) if position is not None else 10 ** 6, lesson.get("publishedAt") or "")
 
 
 def list_catalogue():
@@ -59,15 +66,22 @@ def list_catalogue():
         if "LastEvaluatedKey" not in page:
             break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
-    rows = {}                                               # dicts keep insertion order: newest topic first
+    courses = {}
     for item in items:
         if item.get("objectivesStatus") != "PUBLISHED":     # belt and braces: GSI1 CATALOGUE is published only
             continue
         topic = item.get("topicId") or "other"
-        rows.setdefault(topic, {"topicId": topic, "topicName": item.get("topicName") or "Other", "lessons": []})
-        rows[topic]["lessons"].append(card(item))
-    lessons = [lesson for row in rows.values() for lesson in row["lessons"]]
-    return response(200, {"featured": lessons[0] if lessons else None, "rows": list(rows.values())})
+        courses.setdefault(topic, {"topicId": topic, "topicName": item.get("topicName") or "Other", "lessons": []})
+        courses[topic]["lessons"].append(card(item))
+    for course in courses.values():                         # a course is a curriculum: number the lessons in order
+        course["lessons"].sort(key=lesson_order)
+        for number, lesson in enumerate(course["lessons"], start=1):
+            lesson["lessonNumber"] = number
+        course["lessonCount"] = len(course["lessons"])
+        course["totalDurationMs"] = sum(int(l.get("durationMs") or 0) for l in course["lessons"])
+    rows = sorted(courses.values(), key=lambda c: c["topicName"].lower())     # courses A-Z
+    first = rows[0]["lessons"][0] if rows else None
+    return response(200, {"featured": first, "rows": rows})
 
 
 def get_lesson(video_id):

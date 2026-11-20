@@ -75,6 +75,20 @@ def reviews_due(user_id):
     return response(200, {"reviews": reviews})
 
 
+def progress(user_id):
+    """Which lessons this learner has practised (and how many of each lesson's ideas).
+    Every idea a learner has practised has a schedule item in GSI3 under DUE#<sub>, whatever its date."""
+    counts, kwargs = {}, {"IndexName": "GSI3", "KeyConditionExpression": Key("GSI3PK").eq(f"DUE#{user_id}")}
+    while True:
+        page = table().query(**kwargs)
+        for item in page.get("Items", []):
+            if item.get("videoId"):
+                counts[item["videoId"]] = counts.get(item["videoId"], 0) + 1
+        if "LastEvaluatedKey" not in page:
+            return response(200, {"practised": counts})
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
 def handler(event, context):
     user_id, groups = caller(event)
     if not groups & {"learners", "educators", "creators"}:
@@ -84,4 +98,6 @@ def handler(event, context):
         return practice(params["videoId"])
     if route == "GET /learn/reviews/due":
         return reviews_due(user_id)
+    if route == "GET /learn/progress":
+        return progress(user_id)
     return response(404, {"message": "Unknown route"})
