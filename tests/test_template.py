@@ -60,3 +60,19 @@ def test_three_groups_exist():
     resources = load_template()["Resources"]
     names = {r["Properties"]["GroupName"] for r in resources.values() if r["Type"] == "AWS::Cognito::UserPoolGroup"}
     assert names == {"creators", "educators", "learners"}
+
+
+
+def test_upload_bucket_is_private_encrypted_and_https_only():
+    resources = load_template()["Resources"]
+    bucket = resources["UploadBucket"]["Properties"]
+    assert all(bucket["PublicAccessBlockConfiguration"].values())
+    assert "BucketEncryption" in bucket
+    statement = resources["UploadBucketPolicy"]["Properties"]["PolicyDocument"]["Statement"][0]
+    assert statement["Effect"] == "Deny" and statement["Condition"]["Bool"]["aws:SecureTransport"] == "false"
+
+
+def test_tables_have_point_in_time_recovery():
+    resources = load_template()["Resources"]
+    for name in ("AppTable", "AnswerKeysTable"):
+        assert resources[name]["Properties"]["PointInTimeRecoverySpecification"]["PointInTimeRecoveryEnabled"]

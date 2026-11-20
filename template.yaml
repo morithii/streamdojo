@@ -5,6 +5,7 @@
 # Built one exercise at a time:
 #   Step 1  - alerts topic
 #   Step 4  - Cognito sign-in (creators / educators / learners) + REST API with GET /me
+#   Step 5  - DynamoDB tables, private upload bucket, POST /videos (presigned upload) + GET /videos
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -233,6 +234,155 @@ Resources:
             Path: /me
             Method: get
 
+  # ===========================================================================
+  # Step 5: data (see docs/data-model.md) and video uploads
+  # ===========================================================================
+
+  # Main single-table store: lessons, objectives, attempts, schedules, belts, topics
+  AppTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub streamdojo-${Environment}
+      BillingMode: PAY_PER_REQUEST          # on-demand: pay per request, nothing when idle
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true    # restore to any second in the last 35 days
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: GSI1PK, AttributeType: S }
+        - { AttributeName: GSI1SK, AttributeType: S }
+        - { AttributeName: GSI2PK, AttributeType: S }
+        - { AttributeName: GSI2SK, AttributeType: S }
+        - { AttributeName: GSI3PK, AttributeType: S }
+        - { AttributeName: GSI3SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1                   # DRAFTS queue, then CATALOGUE (sparse)
+          KeySchema:
+            - { AttributeName: GSI1PK, KeyType: HASH }
+            - { AttributeName: GSI1SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: GSI2                   # creator's uploads; flagged answers (overloaded)
+          KeySchema:
+            - { AttributeName: GSI2PK, KeyType: HASH }
+            - { AttributeName: GSI2SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: GSI3                   # a learner's due reviews (sparse)
+          KeySchema:
+            - { AttributeName: GSI3PK, KeyType: HASH }
+            - { AttributeName: GSI3SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  # Answer keys live in their own table so IAM - not just code - stops
+  # learner-facing functions from ever reading them
+  AnswerKeysTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub streamdojo-${Environment}-answer-keys
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+
+  # Private bucket where creators' original videos land
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub streamdojo-${Environment}-uploads-${AWS::AccountId}   # bucket names are global
+      PublicAccessBlockConfiguration:       # nothing in here can ever be made public
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced   # ACLs disabled; the bucket owner owns every object
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256          # SSE-S3: encrypted at rest, no KMS cost
+      VersioningConfiguration:
+        Status: Enabled                     # an overwritten or deleted original can be recovered
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true          # "Object Created" events go to EventBridge (used in Step 6)
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: [!Ref FrontendUrl]   # only our web app may upload from a browser
+            AllowedMethods: [POST]
+            AllowedHeaders: ["*"]
+            MaxAge: 3000
+
+  # Refuse any request that doesn't use HTTPS
+  UploadBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt UploadBucket.Arn
+              - !Sub ${UploadBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # POST /videos (start an upload) and GET /videos (my uploads) - creators only
+  VideosFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-videos
+      CodeUri: src/videos/
+      Handler: app.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          UPLOAD_BUCKET: !Ref UploadBucket
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: CreateVideoItems
+              Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AppTable.Arn
+            - Sid: ListMyVideos
+              Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub ${AppTable.Arn}/index/GSI2
+            # A presigned upload acts with the permissions of whoever signed it,
+            # so this function may only put objects under raw/ - nothing else
+            - Sid: SignUploadsToRawOnly
+              Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub ${UploadBucket.Arn}/raw/*
+      Events:
+        CreateVideo:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /videos
+            Method: post
+        ListVideos:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /videos
+            Method: get
+
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need
 # -----------------------------------------------------------------------------
@@ -252,3 +402,12 @@ Outputs:
   HostedLoginUrl:
     Description: Cognito hosted sign-in page
     Value: !Sub https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=code&scope=openid+email+profile&redirect_uri=${FrontendUrl}/
+  AppTableName:
+    Description: Main DynamoDB table
+    Value: !Ref AppTable
+  AnswerKeysTableName:
+    Description: Answer-keys DynamoDB table
+    Value: !Ref AnswerKeysTable
+  UploadBucketName:
+    Description: Private bucket for original video uploads
+    Value: !Ref UploadBucket
