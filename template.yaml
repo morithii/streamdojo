@@ -9,6 +9,7 @@
 #   Step 6  - upload event -> EventBridge -> Step Functions (starts exactly once)
 #   Step 7  - MediaConvert: adaptive HLS (360p/720p/1080p), audio for Transcribe, thumbnail
 #   Steps 8-9 - Transcribe (English subtitles + clean transcript) -> Translate (fr, es, it, el)
+#   Steps 10-11 - ClipSensei (Bedrock) drafts learning objectives -> educator review + publish API
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -31,6 +32,10 @@ Parameters:
     Type: String
     Default: http://localhost:8080
     Description: Where the web app runs; Cognito only redirects back to this address after sign-in
+  GenerationModelId:
+    Type: String
+    Default: eu.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: Bedrock EU inference profile ClipSensei uses to draft learning objectives
 
 # -----------------------------------------------------------------------------
 # Conditions: only subscribe an email when one was actually provided
@@ -469,6 +474,7 @@ Resources:
         MediaConvertRoleArn: !GetAtt MediaConvertRole.Arn
         PrepareTranscriptFunctionArn: !GetAtt PrepareTranscriptFunction.Arn
         TranslateSubtitlesFunctionArn: !GetAtt TranslateSubtitlesFunction.Arn
+        GenerateObjectivesFunctionArn: !GetAtt GenerateObjectivesFunction.Arn
       Tracing:
         Enabled: true
       Logging:
@@ -543,6 +549,7 @@ Resources:
               Resource:
                 - !GetAtt PrepareTranscriptFunction.Arn
                 - !GetAtt TranslateSubtitlesFunction.Arn
+                - !GetAtt GenerateObjectivesFunction.Arn
       Events:
         VideoUploaded:
           Type: EventBridgeRule
@@ -620,6 +627,108 @@ Resources:
               Effect: Allow
               Action: dynamodb:UpdateItem
               Resource: !GetAtt AppTable.Arn
+
+  # ===========================================================================
+  # Steps 10-11: ClipSensei (Bedrock) drafts learning objectives; educators review and publish
+  # ===========================================================================
+
+  # ClipSensei: reads the transcript, drafts objectives + answer keys with Amazon Bedrock
+  GenerateObjectivesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-generate-objectives
+      CodeUri: src/generate_objectives/
+      Handler: app.handler
+      Timeout: 120                          # an LLM call on a long transcript can take a while
+      MemorySize: 512
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          KEYS_TABLE_NAME: !Ref AnswerKeysTable
+          MEDIA_BUCKET: !Ref ProcessedBucket
+          MODEL_ID: !Ref GenerationModelId
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadTranscript
+              Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub ${ProcessedBucket.Arn}/processed/*
+            - Sid: InvokeClipSenseiModel    # only this EU inference profile and the Anthropic models behind it
+              Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${GenerationModelId}
+                - arn:aws:bedrock:*::foundation-model/anthropic.*
+            - Sid: WriteDraftObjectives
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+            - Sid: WriteAnswerKeys
+              Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AnswerKeysTable.Arn
+
+  # Educator API: review queue, view/edit objectives with answer keys, publish
+  EducatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-educator
+      CodeUri: src/educator/
+      Handler: app.handler
+      Timeout: 15
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          KEYS_TABLE_NAME: !Ref AnswerKeysTable
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReviewAndPublishLessons
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt AppTable.Arn
+                - !Sub ${AppTable.Arn}/index/GSI1
+            - Sid: ReadAndEditAnswerKeys
+              Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource: !GetAtt AnswerKeysTable.Arn
+      Events:
+        ListDrafts:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons
+            Method: get
+        GetObjectives:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons/{videoId}/objectives
+            Method: get
+        UpdateObjective:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons/{videoId}/objectives/{objectiveId}
+            Method: put
+        PublishLesson:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons/{videoId}/publish
+            Method: post
 
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need

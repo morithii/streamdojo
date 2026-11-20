@@ -52,3 +52,11 @@ def test_translates_four_languages_in_parallel():
     assert STATES["SetLanguages"]["Result"] == ["fr", "es", "it", "el"]
     assert STATES["TranslateAll"]["Type"] == "Map"
     assert STATES["TranslateAll"]["MaxConcurrency"] == 4
+
+
+
+def test_clipsensei_runs_after_captions_and_its_failure_is_contained():
+    assert STATES["MarkCaptionsReady"]["Next"] == "GenerateObjectives"
+    assert STATES["MarkCaptionsPartial"]["Next"] == "GenerateObjectives"
+    assert [c["Next"] for c in STATES["GenerateObjectives"]["Catch"]] == ["MarkObjectivesFailed"]
+    assert STATES["MarkObjectivesFailed"]["Next"] == "Done"

@@ -98,3 +98,21 @@ def test_caption_functions_exist_with_least_privilege_translate():
     assert "translate:TranslateText" in actions
     assert "dynamodb:Scan" not in actions
     assert "PrepareTranscriptFunction" in resources
+
+
+
+def test_bedrock_access_is_limited_to_the_chosen_model():
+    resources = load_template()["Resources"]
+    statements = resources["GenerateObjectivesFunction"]["Properties"]["Policies"][0]["Statement"]
+    bedrock = [s for s in statements if s["Sid"] == "InvokeClipSenseiModel"][0]
+    assert bedrock["Action"] == "bedrock:InvokeModel"
+    assert "*" != bedrock["Resource"]
+    assert "GenerationModelId" in load_template()["Parameters"]
+
+
+def test_learner_facing_code_cannot_read_answer_keys():
+    # Only the generator and the educator API reference the answer-keys table
+    resources = load_template()["Resources"]
+    readers = [name for name, r in resources.items()
+               if r["Type"] == "AWS::Serverless::Function" and "AnswerKeysTable" in str(r["Properties"].get("Policies", ""))]
+    assert sorted(readers) == ["EducatorFunction", "GenerateObjectivesFunction"]

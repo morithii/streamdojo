@@ -1,5 +1,5 @@
 {
-  "Comment": "StreamDojo ProcessVideo: runs once per upload. Start exactly once -> MediaConvert -> Transcribe -> Translate. ClipSensei objectives are added in a later step.",
+  "Comment": "StreamDojo ProcessVideo: start exactly once -> MediaConvert -> Transcribe -> Translate -> ClipSensei drafts learning objectives for educator review.",
   "StartAt": "ParseUploadEvent",
   "States": {
     "ParseUploadEvent": {
@@ -624,7 +624,7 @@
           "Next": "MarkCaptionsFailed"
         }
       ],
-      "Next": "Done"
+      "Next": "GenerateObjectives"
     },
     "MarkCaptionsPartial": {
       "Type": "Task",
@@ -647,7 +647,7 @@
         }
       },
       "ResultPath": null,
-      "Next": "Done"
+      "Next": "GenerateObjectives"
     },
     "MarkCaptionsFailed": {
       "Type": "Task",
@@ -675,6 +675,65 @@
     },
     "Done": {
       "Type": "Succeed"
+    },
+    "GenerateObjectives": {
+      "Type": "Task",
+      "Comment": "ClipSensei (Bedrock) drafts learning objectives; the lesson joins the educator's DRAFTS queue",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${GenerateObjectivesFunctionArn}",
+        "Payload": {
+          "videoId.$": "$.videoId"
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.objectivesError",
+          "Next": "MarkObjectivesFailed"
+        }
+      ],
+      "Next": "Done"
+    },
+    "MarkObjectivesFailed": {
+      "Type": "Task",
+      "Comment": "The video and captions still work; only objectivesStatus changes",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET objectivesStatus = :failed",
+        "ExpressionAttributeValues": {
+          ":failed": {
+            "S": "FAILED"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Done"
     }
   }
 }
