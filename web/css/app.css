@@ -146,15 +146,9 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .score-sensei { width: 56px; flex: none; }
 @media (max-width: 700px) { .landing { flex-direction: column; } .sensei.large img { width: 160px; } }
 
-/* Player: a simple wooden frame around the video - the only dojo touch on this page */
-:root { --wood: #8b5e3c; --wood-dark: #5a3d28; --wood-light: #b07a50; }
-.player.frame {
-  border: 10px solid var(--wood);
-  border-top-color: var(--wood-light); border-left-color: var(--wood-light);     /* light from the top-left */
-  border-radius: 6px; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), inset 0 0 0 2px var(--wood-dark);
-}
+/* Player: the 16:9 video sits in a turquoise border (see "Player border" below) */
 .watch .sensei img { width: 76px; }
-.player.frame { aspect-ratio: auto; }                       /* the 16:9 belongs to the video, not the wooden frame */
+.player.frame { aspect-ratio: auto; }                       /* the 16:9 belongs to the video, not its border */
 .player.frame video { aspect-ratio: 16 / 9; height: auto; }
 .landing .bubble { color: var(--bg); font-size: 1rem; margin: 0; }   /* beat the landing paragraph style */
 
@@ -241,3 +235,42 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 /* Focus ring only for keyboard users, not after a mouse click */
 .logo:focus:not(:focus-visible), .btn:focus:not(:focus-visible) { outline: none; }
 .logo:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+
+/* Header navigation: Learner / Creator / Educator / Sign out - the current section is highlighted */
+.account .btn.nav.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+/* Home: the featured lesson in the centre, ClipSensei right next to it */
+.feature { display: flex; justify-content: center; align-items: flex-end; gap: 1.5rem; padding: 2.5rem clamp(1rem, 4vw, 3rem) 1rem; }
+.feature-main { width: min(760px, 100%); }
+.feature-main h1 { font-size: clamp(1.6rem, 3.2vw, 2.4rem); margin: 0.2rem 0 0.3rem; }
+.feature-main .eyebrow { margin: 1rem 0 0; }
+.feature-video {
+  position: relative; display: block; width: 100%; padding: 0; cursor: pointer;
+  border: 3px solid var(--accent); border-radius: var(--radius); overflow: hidden; background: #000;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5); transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.feature-video img, .feature-video .thumb-missing { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.feature-video:hover, .feature-video:focus-visible { transform: scale(1.01); box-shadow: 0 0 0 4px rgba(46, 196, 182, 0.3), 0 18px 40px rgba(0, 0, 0, 0.5); }
+.feature-video .play {
+  position: absolute; inset: 0; margin: auto; width: 84px; height: 84px; border-radius: 50%;
+  display: grid; place-items: center; padding-left: 6px; font-size: 2rem;
+  background: var(--accent); color: var(--on-accent); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.feature .sensei.large { flex-direction: column-reverse; align-items: center; margin-bottom: 5.5rem; }
+.feature .sensei.large img { width: 150px; }
+.feature .sensei.large .bubble { max-width: 15rem; color: var(--bg); }
+@media (max-width: 1000px) { .feature .sensei { display: none; } }
+
+/* Player border: the turquoise accent */
+.player.frame { border: 3px solid var(--accent); border-radius: var(--radius);
+  box-shadow: 0 0 0 1px rgba(46, 196, 182, 0.25), 0 18px 40px rgba(0, 0, 0, 0.55); }
+
+/* Creator upload page */
+.upload { background: var(--panel); border-radius: var(--radius); padding: 1.2rem; margin-top: 1rem; }
+.upload input[type="file"] { color: var(--muted); }
+.upload-bar { margin-top: 1rem; }
+.upload-bar span { background: var(--accent); transition: width 0.2s; }
+.tag.good { border-color: var(--good); color: var(--good); }
+.tag.bad { border-color: var(--miss); color: var(--miss); }
+.tag.busy { border-color: var(--accent); color: #d6e2ee; }
+

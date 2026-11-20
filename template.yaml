@@ -331,7 +331,8 @@ Resources:
           EventBridgeEnabled: true          # "Object Created" events go to EventBridge (used in Step 6)
       CorsConfiguration:
         CorsRules:
-          - AllowedOrigins: [!Ref FrontendUrl]   # only our web app may upload from a browser
+          # Only our web app may upload from a browser: local development, and the CloudFront site (Step 17)
+          - AllowedOrigins: [!Ref FrontendUrl, !Sub "https://${SiteDistribution.DomainName}"]
             AllowedMethods: [POST]
             AllowedHeaders: ["*"]
             MaxAge: 3000
@@ -366,7 +367,9 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable
-          UPLOAD_BUCKET: !Ref UploadBucket
+          # The bucket's NAME as text, not !Ref: the upload bucket's CORS rule now points at CloudFront,
+          # CloudFront points at the API, the API at this function - a !Ref here would close that loop
+          UPLOAD_BUCKET: !Sub streamdojo-${Environment}-uploads-${AWS::AccountId}
           ALLOWED_ORIGIN: !Ref FrontendUrl
       Policies:
         - Version: "2012-10-17"
@@ -384,7 +387,7 @@ Resources:
             - Sid: SignUploadsToRawOnly
               Effect: Allow
               Action: s3:PutObject
-              Resource: !Sub ${UploadBucket.Arn}/raw/*
+              Resource: !Sub arn:aws:s3:::streamdojo-${Environment}-uploads-${AWS::AccountId}/raw/*   # same reason
       Events:
         CreateVideo:
           Type: Api

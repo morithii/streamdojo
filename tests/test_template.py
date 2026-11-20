@@ -152,3 +152,9 @@ def test_api_responses_are_never_cached_by_cloudfront():
     behaviours = load_template()["Resources"]["SiteDistribution"]["Properties"]["DistributionConfig"]["CacheBehaviors"]
     api = [b for b in behaviours if b["PathPattern"] == "/api/*"][0]
     assert api["CachePolicyId"] == "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"     # Managed-CachingDisabled
+
+def test_browser_uploads_allowed_only_from_our_site():
+    cors = load_template()["Resources"]["UploadBucket"]["Properties"]["CorsConfiguration"]["CorsRules"][0]
+    assert cors["AllowedMethods"] == ["POST"] and len(cors["AllowedOrigins"]) == 2
+    assert "SiteDistribution.DomainName" in str(cors["AllowedOrigins"][1])
+    assert "*" not in str(cors["AllowedOrigins"])                     # never "any website"
