@@ -1,0 +1,268 @@
+// =============================================================================
+// Educator dashboard (educators group only - the API enforces this, the UI just hides the link).
+//
+//   #/teach                    drafts waiting for review + published lessons
+//   #/teach/review/<id>        edit ClipSensei's objectives, add or remove one, publish
+//   #/teach/insights/<id>      what's sticking, what isn't, who needs help (+ ClipSensei's note)
+//
+// The educator sees the answer keys here; learners never can (separate table, separate IAM).
+// =============================================================================
+import { el, sensei } from "./dom.js";
+import { api } from "./api.js";
+
+const MAX_OBJECTIVES = 5;
+const enc = encodeURIComponent;
+const percent = (rate) => (rate === null || rate === undefined ? "–" : `${Math.round(rate * 100)}%`);
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+export async function renderTeach(app) {
+  const [{ lessons: drafts }, { rows }] = await Promise.all([api("/lessons"), api("/catalogue")]);
+  const published = rows.flatMap((row) => row.lessons.map((lesson) => ({ ...lesson, topicName: row.topicName })));
+
+  app.replaceChildren(
+    el("section", { className: "teach" },
+      el("div", { className: "teach-head" },
+        el("div", {},
+          el("p", { className: "eyebrow" }, "Educator"),
+          el("h1", {}, "Your dojo"),
+        ),
+        sensei(drafts.length
+          ? `${drafts.length} lesson${drafts.length === 1 ? "" : "s"} waiting for your review. I drafted the questions - you have the final say.`
+          : "Nothing waiting for review. Check how your published lessons are sticking."),
+      ),
+      el("h2", {}, "Drafts to review"),
+      drafts.length
+        ? el("div", { className: "teach-list" }, ...drafts.map((d) =>
+            el("article", { className: "teach-item" },
+              el("div", {},
+                el("h3", {}, d.title || "Untitled lesson"),
+                el("p", { className: "meta" }, `${d.objectiveCount || 0} objective(s) drafted by ClipSensei · subtitles: ${(d.captionStatus || "").toLowerCase() || "–"}`),
+              ),
+              el("a", { className: "btn", href: `#/teach/review/${enc(d.videoId)}` }, "Review & publish"),
+            )))
+        : el("p", { className: "meta" }, "No drafts right now. New uploads appear here once ClipSensei has drafted their objectives."),
+      el("h2", {}, "Published lessons"),
+      published.length
+        ? el("div", { className: "teach-list" }, ...published.map((l) =>
+            el("article", { className: "teach-item" },
+              l.thumbnailUrl ? el("img", { src: l.thumbnailUrl, alt: "", className: "teach-thumb" }) : null,
+              el("div", {},
+                el("h3", {}, l.title),
+                el("p", { className: "meta" }, l.topicName || ""),
+              ),
+              el("div", { className: "practice-actions" },
+                el("a", { className: "btn ghost", href: `#/teach/review/${enc(l.videoId)}` }, "Edit objectives"),
+                el("a", { className: "btn", href: `#/teach/insights/${enc(l.videoId)}` }, "Insights"),
+              ),
+            )))
+        : el("p", { className: "meta" }, "Nothing published yet."),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Review: edit, add, remove objectives, then publish
+// ---------------------------------------------------------------------------
+function field(label, control, help) {
+  return el("label", { className: "field" }, el("span", {}, label), control, help ? el("small", {}, help) : null);
+}
+
+function objectiveForm(lesson, objective, onDone) {
+  const isNew = !objective.objectiveId;
+  const status = el("p", { className: "status", role: "status" });
+  const inputs = {
+    objective: el("input", { value: objective.objective || "", placeholder: "Explain why …" }),
+    timestamp: el("input", { value: objective.timestamp || "", placeholder: "mm:ss", className: "short" }),
+    modelAnswer: el("textarea", { value: objective.modelAnswer || "", rows: 3 }),
+    hint: el("input", { value: objective.hint || "" }),
+  };
+  const pointList = el("div", { className: "stack" });
+  const addPoint = (text = "") => {
+    const row = el("div", { className: "row-input" },
+      el("input", { value: text, placeholder: "One complete idea a good answer must contain" }),
+      el("button", { type: "button", className: "btn ghost small", ariaLabel: "Remove point",
+                     onclick: () => { if (pointList.children.length > 2) row.remove(); } }, "✕"),
+    );
+    pointList.append(row);
+  };
+  const points = (objective.essentialPoints || []).map((p) => (typeof p === "string" ? p : p.text));
+  (points.length ? points : ["", ""]).forEach(addPoint);
+  const prompts = [0, 1, 2].map((i) => el("input", { value: (objective.prompts || [])[i] || "",
+                                                      placeholder: ["Why …?", "What would happen if …?", "Explain to a colleague …"][i] }));
+
+  async function save() {
+    const body = {
+      objective: inputs.objective.value, timestamp: inputs.timestamp.value.trim(),
+      modelAnswer: inputs.modelAnswer.value, hint: inputs.hint.value,
+      essentialPoints: [...pointList.querySelectorAll("input")].map((i) => i.value).filter((v) => v.trim()),
+      prompts: prompts.map((i) => i.value),
+    };
+    status.textContent = "Saving…";
+    try {
+      if (isNew) {
+        await api(`/lessons/${enc(lesson.videoId)}/objectives`, { method: "POST", body });
+      } else {
+        await api(`/lessons/${enc(lesson.videoId)}/objectives/${enc(objective.objectiveId)}`, { method: "PUT", body });
+      }
+      status.textContent = "Saved.";
+      if (isNew) onDone();
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm("Remove this objective and its answer key?")) return;
+    try {
+      await api(`/lessons/${enc(lesson.videoId)}/objectives/${enc(objective.objectiveId)}`, { method: "DELETE" });
+      onDone();
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  }
+
+  return el("article", { className: `objective-card ${isNew ? "new" : ""}` },
+    el("div", { className: "objective-head" },
+      el("h3", {}, isNew ? "New objective" : `Objective ${objective.objectiveId.replace("obj", "")}`),
+      isNew ? el("span", { className: "tag" }, "written by you") : el("span", { className: "tag" }, objective.status === "PUBLISHED" ? "live" : "draft"),
+    ),
+    field("Objective", inputs.objective, "What the learner should be able to do, starting with a verb."),
+    field("Taught at", inputs.timestamp, "Where in the video - used for the \"Rewatch from\" button."),
+    el("fieldset", { className: "field" },
+      el("legend", {}, "Key ideas a good answer must contain (2–4, each a different idea)"),
+      pointList,
+      el("button", { type: "button", className: "btn ghost small",
+                     onclick: () => { if (pointList.children.length < 4) addPoint(); } }, "+ Add key idea"),
+    ),
+    field("Model answer", inputs.modelAnswer, "Shown after marking. Should contain every key idea."),
+    field("Hint", inputs.hint, "Nudges without giving the answer away."),
+    el("fieldset", { className: "field" },
+      el("legend", {}, "Three ways to ask it (first: practice; the others rotate in spaced reviews)"),
+      ...prompts,
+    ),
+    el("div", { className: "practice-actions" },
+      el("button", { className: "btn", onclick: save }, isNew ? "Add objective" : "Save changes"),
+      !isNew && lesson.objectivesStatus === "DRAFT_READY" && lesson.objectives.length > 1
+        ? el("button", { className: "btn ghost", onclick: remove }, "Remove")
+        : null,
+      isNew ? el("button", { className: "btn ghost", onclick: onDone }, "Cancel") : null,
+    ),
+    status,
+  );
+}
+
+export async function renderReview(app, videoId) {
+  const lesson = await api(`/lessons/${enc(videoId)}/objectives`);
+  const reload = () => renderReview(app, videoId);
+  const list = el("div", { className: "stack" }, ...lesson.objectives.map((o) => objectiveForm(lesson, o, reload)));
+  const isDraft = lesson.objectivesStatus === "DRAFT_READY";
+
+  const addButton = el("button", {
+    className: "btn ghost",
+    disabled: lesson.objectives.length >= MAX_OBJECTIVES,
+    onclick: () => { addButton.remove(); list.append(objectiveForm(lesson, {}, reload)); },
+  }, lesson.objectives.length >= MAX_OBJECTIVES ? `Maximum ${MAX_OBJECTIVES} objectives` : "+ Add an objective ClipSensei missed");
+
+  const topic = el("input", { placeholder: "Topic row on the home page, e.g. Cloud Career Skills" });
+  const publishStatus = el("p", { className: "status", role: "status" });
+  const publishPanel = isDraft
+    ? el("section", { className: "publish" },
+        el("h2", {}, "Publish"),
+        el("p", { className: "meta" }, "Learners see this lesson only after you publish. Save each objective first."),
+        field("Topic", topic),
+        el("button", {
+          className: "btn big",
+          onclick: async () => {
+            publishStatus.textContent = "Publishing…";
+            try {
+              await api(`/lessons/${enc(videoId)}/publish`, { method: "POST", body: { topic: topic.value } });
+              location.hash = "#/teach";
+            } catch (error) {
+              publishStatus.textContent = error.message;
+            }
+          },
+        }, "Publish lesson"),
+        publishStatus,
+      )
+    : null;
+
+  app.replaceChildren(
+    el("section", { className: "teach" },
+      el("a", { className: "back", href: "#/teach" }, "← Educator dashboard"),
+      el("p", { className: "eyebrow" }, isDraft ? "Review ClipSensei's draft" : "Edit live objectives"),
+      el("h1", {}, lesson.title || "Untitled lesson"),
+      sensei(isDraft
+        ? "I drafted these from the transcript. Check each key idea is a different idea - that's what makes the marking fair."
+        : "These are live. Edits apply to the next attempt; learners' schedules are kept."),
+      list,
+      addButton,
+      publishPanel,
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Insights
+// ---------------------------------------------------------------------------
+// ClipSensei's note comes as "- **Bold:** text" lines: render the bold safely, as text nodes
+function noteLine(line) {
+  const parts = line.replace(/^-\s*/, "").split("**");
+  return el("li", {}, ...parts.map((part, i) => (i % 2 ? el("strong", {}, part) : part)));
+}
+
+export async function renderInsights(app, videoId) {
+  const data = await api(`/insights/lessons/${enc(videoId)}`);
+  const noteLines = (data.summary || "").split("\n").map((l) => l.trim()).filter(Boolean);
+
+  app.replaceChildren(
+    el("section", { className: "teach" },
+      el("a", { className: "back", href: "#/teach" }, "← Educator dashboard"),
+      el("p", { className: "eyebrow" }, `Insights · ${data.topicName || ""}`),
+      el("h1", {}, data.title),
+      el("div", { className: "note" },
+        el("img", { src: "/img/clipsensei.svg", alt: "", className: "score-sensei" }),
+        el("div", {},
+          el("strong", {}, "ClipSensei's note for you"),
+          noteLines.length ? el("ul", {}, ...noteLines.map(noteLine)) : el("p", { className: "meta" }, "No summary available right now - the numbers below are still up to date."),
+        ),
+      ),
+      el("h2", {}, "What's sticking"),
+      ...data.objectives.map((o) =>
+        el("article", { className: "objective-card" },
+          el("div", { className: "objective-head" },
+            el("h3", {}, o.objective),
+            el("span", { className: "tag" }, `taught at ${o.timestamp}`),
+          ),
+          el("div", { className: "stats" },
+            el("div", {}, el("strong", {}, percent(o.unaidedRecallRate)), el("span", {}, "recalled unaided")),
+            el("div", {}, el("strong", {}, String(o.attempts)), el("span", {}, "counted attempts")),
+            el("div", {}, el("strong", {}, String(o.hintsUsed)), el("span", {}, "hints used")),
+            el("div", {}, el("strong", {}, String(o.dontRemember)), el("span", {}, "\"I don't remember\"")),
+          ),
+          o.thinEvidence ? el("p", { className: "meta" }, "Fewer than 5 attempts so far - treat these percentages as early signals.") : null,
+          el("ul", { className: "miss-list" }, ...o.points.map((p) =>
+            el("li", {},
+              el("div", { className: "miss-label" }, el("span", {}, p.text), el("strong", {}, `${percent(p.missRate)} missed`)),
+              el("div", { className: "bar" }, el("span", { style: `width: ${Math.round((p.missRate || 0) * 100)}%` })),
+            ))),
+        )),
+      el("h2", {}, "Who needs help"),
+      data.learners.length
+        ? el("table", { className: "learners" },
+            el("thead", {}, el("tr", {}, ...["Learner", "Ideas practised", "Overdue", "Still practising", "Longest interval", ""].map((h) => el("th", {}, h)))),
+            el("tbody", {}, ...data.learners.map((l) =>
+              el("tr", {},
+                el("td", {}, l.displayName),
+                el("td", {}, String(l.practised)),
+                el("td", {}, String(l.overdue)),
+                el("td", {}, String(l.needsPractice)),
+                el("td", {}, `${l.longestIntervalDays} day${l.longestIntervalDays === 1 ? "" : "s"}`),
+                el("td", {}, l.needsHelp ? el("span", { className: "tag warn" }, "needs help") : el("span", { className: "tag" }, "on track")),
+              ))),
+          )
+        : el("p", { className: "meta" }, "No learner has practised this lesson yet."),
+    ),
+  );
+}

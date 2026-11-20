@@ -3,6 +3,8 @@
 GET  /lessons?status=DRAFT                            lessons waiting for review (oldest first)
 GET  /lessons/{videoId}/objectives                    objectives with prompts AND answer keys
 PUT  /lessons/{videoId}/objectives/{objectiveId}      save the educator's edits
+POST /lessons/{videoId}/objectives                    add an objective ClipSensei didn't pick (max 5)
+DELETE /lessons/{videoId}/objectives/{objectiveId}    remove a weak draft objective (drafts only, keep at least 1)
 POST /lessons/{videoId}/publish   {"topic": "..."}    publish: DRAFTS queue -> CATALOGUE
 
 Educators only. Nothing is shown to learners until an educator publishes it.
@@ -19,6 +21,7 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "")
 KEYS_TABLE_NAME = os.environ.get("KEYS_TABLE_NAME", "")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 TIMESTAMP = re.compile(r"^\d{1,3}:\d{2}$")
+MAX_OBJECTIVES = 5
 
 _tables = {}
 
@@ -108,6 +111,61 @@ def update_objective(video_id, objective_id, body, user_id):
     return response(200, {"message": "Saved", "objectiveId": objective_id})
 
 
+def lesson_objectives(video_id):
+    query = Key("PK").eq(f"VIDEO#{video_id}") & Key("SK").begins_with("OBJ#")
+    return [i for i in table(TABLE_NAME).query(KeyConditionExpression=query)["Items"] if i["SK"].startswith("OBJ#")]
+
+
+def add_objective(video_id, body, user_id):
+    error = validate_edit(body)
+    if error:
+        return response(400, {"message": error})
+    lesson_key = {"PK": f"VIDEO#{video_id}", "SK": "META"}
+    lesson = table(TABLE_NAME).get_item(Key=lesson_key).get("Item")
+    if not lesson or lesson.get("objectivesStatus") not in ("DRAFT_READY", "PUBLISHED"):
+        return response(404, {"message": "Lesson not found or ClipSensei hasn't drafted it yet"})
+    existing = lesson_objectives(video_id)
+    if len(existing) >= MAX_OBJECTIVES:
+        return response(409, {"message": f"A lesson can have at most {MAX_OBJECTIVES} objectives"})
+    number = max([int(o["objectiveId"][3:]) for o in existing] + [0]) + 1     # obj1, obj2... never reuse an id
+    objective_id = f"obj{number}"
+    # On a published lesson the new objective goes live straight away, under the lesson's topic
+    status = "PUBLISHED" if lesson["objectivesStatus"] == "PUBLISHED" else "DRAFT"
+    extra = {"topicId": lesson["topicId"]} if status == "PUBLISHED" else {}
+    key = {"PK": f"VIDEO#{video_id}", "SK": f"OBJ#{objective_id}"}
+    table(TABLE_NAME).put_item(Item={**key, **extra, "objectiveId": objective_id, "objective": body["objective"].strip(),
+                                     "prompts": [p.strip() for p in body["prompts"]], "timestamp": body["timestamp"],
+                                     "status": status, "createdBy": user_id, "editedAt": now()},
+                               ConditionExpression="attribute_not_exists(PK)")
+    table(KEYS_TABLE_NAME).put_item(Item={**key, **extra, "objectiveId": objective_id, "status": status,
+        "essentialPoints": [{"pointId": f"p{i}", "text": p.strip()} for i, p in enumerate(body["essentialPoints"], 1)],
+        "modelAnswer": body["modelAnswer"].strip(), "hint": body["hint"].strip()})
+    table(TABLE_NAME).update_item(Key=lesson_key, UpdateExpression="ADD objectiveCount :one",
+                                  ExpressionAttributeValues={":one": 1})
+    return response(201, {"message": "Added", "objectiveId": objective_id, "status": status})
+
+
+def delete_objective(video_id, objective_id):
+    lesson_key = {"PK": f"VIDEO#{video_id}", "SK": "META"}
+    lesson = table(TABLE_NAME).get_item(Key=lesson_key).get("Item")
+    if not lesson:
+        return response(404, {"message": "Lesson not found"})
+    if lesson.get("objectivesStatus") != "DRAFT_READY":
+        # Learners may already have reviews scheduled for a published objective: edit it instead
+        return response(409, {"message": "Only draft objectives can be removed - edit a published one instead"})
+    existing = [o["objectiveId"] for o in lesson_objectives(video_id)]
+    if objective_id not in existing:
+        return response(404, {"message": "Objective not found"})
+    if len(existing) == 1:
+        return response(409, {"message": "A lesson needs at least one objective"})
+    key = {"PK": f"VIDEO#{video_id}", "SK": f"OBJ#{objective_id}"}
+    table(TABLE_NAME).delete_item(Key=key)
+    table(KEYS_TABLE_NAME).delete_item(Key=key)
+    table(TABLE_NAME).update_item(Key=lesson_key, UpdateExpression="ADD objectiveCount :minus",
+                                  ExpressionAttributeValues={":minus": -1})
+    return response(200, {"message": "Removed", "objectiveId": objective_id})
+
+
 def publish(video_id, body, user_id):
     topic = str(body.get("topic", "")).strip()
     if not 2 <= len(topic) <= 60 or not slug(topic):
@@ -157,6 +215,10 @@ def handler(event, context):
         return get_objectives(params["videoId"])
     if route == "PUT /lessons/{videoId}/objectives/{objectiveId}":
         return update_objective(params["videoId"], params["objectiveId"], body, user_id)
+    if route == "POST /lessons/{videoId}/objectives":
+        return add_objective(params["videoId"], body, user_id)
+    if route == "DELETE /lessons/{videoId}/objectives/{objectiveId}":
+        return delete_objective(params["videoId"], params["objectiveId"])
     if route == "POST /lessons/{videoId}/publish":
         return publish(params["videoId"], body, user_id)
     return response(404, {"message": "Unknown route"})

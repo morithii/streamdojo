@@ -717,6 +717,7 @@ Resources:
                 - dynamodb:Query
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
+                - dynamodb:DeleteItem     # Step 16c: remove a weak draft objective
               Resource:
                 - !GetAtt AppTable.Arn
                 - !Sub ${AppTable.Arn}/index/GSI1
@@ -725,6 +726,8 @@ Resources:
               Action:
                 - dynamodb:Query
                 - dynamodb:UpdateItem
+                - dynamodb:PutItem        # Step 16c: an educator adds an objective (with its answer key)
+                - dynamodb:DeleteItem     # Step 16c: ...or removes a draft one
               Resource: !GetAtt AnswerKeysTable.Arn
       Events:
         ListDrafts:
@@ -751,6 +754,18 @@ Resources:
             RestApiId: !Ref StreamDojoApi
             Path: /lessons/{videoId}/publish
             Method: post
+        AddObjective:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons/{videoId}/objectives
+            Method: post
+        DeleteObjective:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons/{videoId}/objectives/{objectiveId}
+            Method: delete
 
   # ===========================================================================
   # Steps 12-13: learner practice (active recall), ClipSensei marking, spaced repetition

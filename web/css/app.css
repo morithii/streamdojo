@@ -180,3 +180,57 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .player.frame video { aspect-ratio: 16 / 9; height: auto; }
 .dojo .sensei img { width: 76px; }
 .landing .bubble { color: var(--bg); font-size: 1rem; margin: 0; }   /* beat the landing paragraph style */
+
+/* Educator dashboard */
+.teach { max-width: 980px; margin: 0 auto; padding: 1.5rem clamp(1rem, 4vw, 2rem) 3rem; }
+.teach h2 { margin-top: 2rem; font-size: 1.25rem; }
+.teach-head { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: center; justify-content: space-between; }
+.teach-list { display: grid; gap: 0.8rem; }
+.teach-item { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between;
+  background: var(--panel); border-radius: var(--radius); padding: 1rem 1.2rem; }
+.teach-item > div:first-of-type { flex: 1; min-width: 14rem; }
+.teach-item h3 { margin: 0; font-size: 1.05rem; }
+.teach-item .meta { margin: 0.2rem 0 0; }
+.teach-thumb { width: 120px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; background: var(--line); }
+.teach-item .btn, .teach-item .practice-actions { margin-top: 0; }
+.stack { display: grid; gap: 1rem; margin-top: 1rem; }
+.objective-card { background: var(--panel); border-radius: var(--radius); padding: 1.2rem; border: 1px solid transparent; }
+.objective-card.new { border-color: var(--accent); }
+.objective-head { display: flex; gap: 1rem; justify-content: space-between; align-items: baseline; }
+.objective-head h3 { margin: 0 0 0.6rem; }
+.tag { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.tag.warn { border-color: var(--partial); color: var(--partial); }
+.field { display: grid; gap: 0.35rem; margin: 0.9rem 0 0; border: 0; padding: 0; }
+.field > span, .field legend { font-weight: 600; font-size: 0.9rem; padding: 0; }
+.field small { color: var(--muted); }
+.field input, .field textarea, .publish input {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 0.55rem 0.7rem; width: 100%;
+}
+.field fieldset input + input, .field > input + input { margin-top: 0.4rem; }
+.field input.short { width: 7rem; }
+.field input:focus, .field textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.field .stack { gap: 0.4rem; margin-top: 0; }
+.row-input { display: flex; gap: 0.5rem; }
+.btn.small { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+.teach > .btn.ghost { margin-top: 1rem; }
+.publish { margin-top: 2rem; background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 1.2rem; }
+.publish h2 { margin-top: 0; }
+.note { display: flex; gap: 1rem; background: var(--panel); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1rem 1.2rem; margin-top: 1rem; }
+.note ul { margin: 0.5rem 0 0; padding-left: 1.1rem; display: grid; gap: 0.4rem; color: #d6e2ee; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.8rem; margin: 0.4rem 0 0.6rem; }
+.stats div { background: var(--bg); border-radius: 8px; padding: 0.7rem; display: grid; }
+.stats strong { font-size: 1.6rem; color: var(--accent); }
+.stats span { color: var(--muted); font-size: 0.85rem; }
+.miss-list { list-style: none; padding: 0; margin: 0.6rem 0 0; display: grid; gap: 0.7rem; }
+.miss-label { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.92rem; }
+.miss-label strong { color: var(--miss); white-space: nowrap; }
+.bar { height: 8px; background: var(--bg); border-radius: 999px; overflow: hidden; margin-top: 0.3rem; }
+.bar span { display: block; height: 100%; background: var(--miss); border-radius: 999px; }
+.learners { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: var(--radius); overflow: hidden; }
+.learners th, .learners td { text-align: left; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--line); }
+.learners th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+.account .btn.ghost { text-decoration: none; }
+@media (max-width: 700px) { .learners { font-size: 0.85rem; } .who { display: none; } }
+
+.field > .btn.small { justify-self: start; }

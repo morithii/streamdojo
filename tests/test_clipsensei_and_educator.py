@@ -32,12 +32,19 @@ class FakeTable:
         if ConditionExpression == "objectivesStatus = :draft" and item.get("objectivesStatus") != "DRAFT_READY":
             raise RuntimeError("ConditionalCheckFailed")
         names = kwargs.get("ExpressionAttributeNames", {})
+        if kwargs["UpdateExpression"].startswith("ADD "):           # e.g. "ADD objectiveCount :one"
+            attr, value = kwargs["UpdateExpression"][4:].split()
+            item[attr] = item.get(attr, 0) + ExpressionAttributeValues[value]
+            return
         for part in kwargs["UpdateExpression"].replace("SET ", "").split(","):
             attr, value = [s.strip() for s in part.split("=")]
             item[names.get(attr, attr)] = ExpressionAttributeValues[value]
 
     def query(self, **kwargs):
         return {"Items": [dict(i) for i in self.items.values()]}   # tests filter what they need
+
+    def delete_item(self, Key):
+        self.items.pop((Key["PK"], Key["SK"]), None)
 
 
 SEGMENTS = {"segments": [{"start": "00:05", "text": "OAC keeps the bucket private."},
@@ -96,7 +103,9 @@ def test_transcript_is_wrapped_as_data_and_tool_use_is_forced():
     gen, _, _ = setup_generator(GOOD)
     gen.handler({"videoId": "v1"}, None)
     call = gen._clients["bedrock-runtime"].calls[0]
-    assert call["messages"][0]["content"][0]["text"].startswith("<transcript>\n[00:05] OAC")
+    text = call["messages"][0]["content"][0]["text"]
+    assert "<transcript>\n[00:05] OAC" in text and text.endswith("</transcript>")
+    assert "aim for 1 key idea" in text                     # a ~1-minute clip gets 1 idea
     assert call["toolConfig"]["toolChoice"] == {"tool": {"name": "save_objectives"}}
 
 
@@ -167,3 +176,46 @@ def test_edit_is_validated():
     res = edu.handler(educator_event("educators", "PUT", "/lessons/{videoId}/objectives/{objectiveId}",
                                      {"videoId": "v1", "objectiveId": "obj1"}, {"objective": "x"}), None)
     assert res["statusCode"] == 400
+
+
+def test_number_of_ideas_scales_with_lesson_length():
+    gen = load("generate_objectives")
+    assert [gen.ideas_to_aim_for(m) for m in (1, 2, 5, 9, 15, 40)] == [1, 1, 2, 3, 5, 5]
+    assert gen.lesson_minutes({"segments": [{"start": "00:05"}, {"start": "12:30"}]}) == 12.5
+
+
+NEW_OBJECTIVE = {"objective": "Describe what a recruiter checks first", "essentialPoints": ["The projects section", "Links to code"],
+                 "modelAnswer": "They look at your projects and follow the links to your code.", "hint": "Where do they click?",
+                 "timestamp": "01:40", "prompts": ["What do recruiters check first?", "Where do they click?", "Explain to a friend."]}
+
+
+def test_educator_adds_an_objective_with_its_answer_key():
+    edu, app, keys = setup_educator()
+    res = edu.handler(educator_event("educators", "POST", "/lessons/{videoId}/objectives", {"videoId": "v1"}, NEW_OBJECTIVE), None)
+    assert res["statusCode"] == 201 and json.loads(res["body"])["objectiveId"] == "obj2"
+    assert app.items[("VIDEO#v1", "OBJ#obj2")]["status"] == "DRAFT"
+    assert "essentialPoints" not in app.items[("VIDEO#v1", "OBJ#obj2")]          # answers only in the keys table
+    assert keys.items[("VIDEO#v1", "OBJ#obj2")]["essentialPoints"][1] == {"pointId": "p2", "text": "Links to code"}
+    assert app.items[("VIDEO#v1", "META")]["objectiveCount"] == 1                # ADD 1 (the fake starts from 0)
+
+
+def test_objective_added_to_a_published_lesson_goes_live():
+    edu, app, _ = setup_educator(objectives_status="PUBLISHED")
+    app.items[("VIDEO#v1", "META")]["topicId"] = "careers"
+    edu.handler(educator_event("educators", "POST", "/lessons/{videoId}/objectives", {"videoId": "v1"}, NEW_OBJECTIVE), None)
+    assert app.items[("VIDEO#v1", "OBJ#obj2")]["status"] == "PUBLISHED"
+    assert app.items[("VIDEO#v1", "OBJ#obj2")]["topicId"] == "careers"
+
+
+def test_remove_only_drafts_and_never_the_last_objective():
+    edu, app, keys = setup_educator()
+    route = "/lessons/{videoId}/objectives/{objectiveId}"
+    last = edu.handler(educator_event("educators", "DELETE", route, {"videoId": "v1", "objectiveId": "obj1"}), None)
+    assert last["statusCode"] == 409                                             # a lesson needs at least one
+    edu.handler(educator_event("educators", "POST", "/lessons/{videoId}/objectives", {"videoId": "v1"}, NEW_OBJECTIVE), None)
+    ok = edu.handler(educator_event("educators", "DELETE", route, {"videoId": "v1", "objectiveId": "obj1"}), None)
+    assert ok["statusCode"] == 200
+    assert ("VIDEO#v1", "OBJ#obj1") not in app.items and ("VIDEO#v1", "OBJ#obj1") not in keys.items
+    published, _, _ = setup_educator(objectives_status="PUBLISHED")
+    res = published.handler(educator_event("educators", "DELETE", route, {"videoId": "v1", "objectiveId": "obj1"}), None)
+    assert res["statusCode"] == 409                                              # learners may have reviews scheduled

@@ -4,13 +4,14 @@
 //   #/watch/<id>       the player with subtitles
 //   #/practise/<id>    practise a lesson with ClipSensei (active recall)
 //   #/reviews          today's spaced-repetition reviews
-// Coming next: the educator dashboard.
+//   #/teach...         the educator dashboard (see teach.js)
 // =============================================================================
 import { initAuth, signIn, signOut, currentUser } from "./auth.js";
 import { api, setApiBase } from "./api.js";
 import { el, formatDuration, sensei } from "./dom.js";
 import { attachStream, stopPlayer } from "./player.js";
 import { runPractice } from "./practice.js";
+import { renderTeach, renderReview, renderInsights } from "./teach.js";
 
 const app = document.getElementById("app");
 const account = document.getElementById("account");
@@ -19,7 +20,9 @@ const watch = (videoId) => go(`#/watch/${encodeURIComponent(videoId)}`);
 
 function renderAccount() {
   const user = currentUser();
+  const isEducator = user && user.groups.includes("educators");
   account.replaceChildren(
+    isEducator ? el("a", { className: "btn ghost", href: "#/teach" }, "Educator") : "",
     user ? el("span", { className: "who" }, user.name, el("small", {}, user.groups.join(" · "))) : "",
     user
       ? el("button", { className: "btn ghost", onclick: signOut }, "Sign out")
@@ -169,10 +172,13 @@ async function route() {
   window.scrollTo(0, 0);
   try {
     if (!currentUser()) return renderLanding();
-    const [, page, id] = location.hash.split("/");          // "#/watch/abc" -> ["#", "watch", "abc"]
+    const [, page, id, sub] = location.hash.split("/");     // "#/watch/abc" -> ["#", "watch", "abc"]
     if (page === "watch" && id) return await renderWatch(decodeURIComponent(id));
     if (page === "practise" && id) return await renderPractise(decodeURIComponent(id));
     if (page === "reviews") return await renderReviews();
+    if (page === "teach" && id === "review" && sub) return await renderReview(app, decodeURIComponent(sub));
+    if (page === "teach" && id === "insights" && sub) return await renderInsights(app, decodeURIComponent(sub));
+    if (page === "teach") return await renderTeach(app);
     return await renderHome();
   } catch (error) {
     renderError(error);
