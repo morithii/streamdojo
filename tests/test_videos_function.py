@@ -83,3 +83,11 @@ def test_lists_only_my_videos_newest_first():
     body = json.loads(res["body"])
     assert body["videos"][0]["videoId"] == "v1"
     assert "GSI2PK" not in body["videos"][0]          # internal keys never leave the API
+
+
+def test_list_includes_progress_details_as_plain_json():
+    from decimal import Decimal
+    videos = setup(items=[{"videoId": "v1", "title": "Lesson", "processingStatus": "READY", "captionStatus": "PENDING",
+                           "subtitleLanguages": {"fr", "en"}, "objectiveCount": Decimal(2)}])   # what DynamoDB returns
+    body = json.loads(videos.handler(event("creators", method="GET"), None)["body"])
+    assert body["videos"][0]["subtitleLanguages"] == ["en", "fr"] and body["videos"][0]["objectiveCount"] == 2

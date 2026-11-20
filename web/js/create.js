@@ -14,18 +14,51 @@ const MAX_BYTES = 2 * 1024 ** 3;
 const TYPES = { "video/mp4": "MP4", "video/quicktime": "MOV" };
 let pollTimer = null;
 
-// One plain-English stage for the three status fields the pipeline writes
-function stage(video) {
-  if (video.processingStatus === "UPLOADING") return ["Waiting for upload", "warn"];
-  if (video.processingStatus === "FAILED") return ["Processing failed", "bad"];
-  if (video.processingStatus !== "READY") return ["Transcoding video…", "busy"];
-  if (video.captionStatus === "PENDING") return ["Adding subtitles…", "busy"];
-  if (video.captionStatus === "FAILED") return ["Subtitles failed", "bad"];        // no transcript, so no questions
-  if (video.objectivesStatus === "PENDING") return ["ClipSensei is drafting questions…", "busy"];
-  if (video.objectivesStatus === "FAILED") return ["Question drafting failed", "bad"];
-  if (video.objectivesStatus === "DRAFT_READY") return ["Waiting for an educator to publish", "warn"];
-  if (video.objectivesStatus === "PUBLISHED") return ["Live", "good"];
-  return [video.objectivesStatus || "Processing…", "busy"];
+// ---------------------------------------------------------------------------
+// Progress tracker: the pipeline writes three status fields; we turn them into five steps.
+// Each step is "done", "active", "waiting" (on a person), "todo" or "failed".
+// ---------------------------------------------------------------------------
+const LANGUAGES = 5;                       // English + French, Spanish, Italian, Greek
+const STALL_MINUTES = 60;                  // nothing in the pipeline should take this long
+
+function steps(v) {
+  const uploaded = v.processingStatus !== "UPLOADING";
+  const transcoded = v.processingStatus === "READY";
+  const captionsDone = ["READY", "PARTIAL"].includes(v.captionStatus);
+  const questionsDone = ["DRAFT_READY", "PUBLISHED"].includes(v.objectivesStatus);
+  const languages = (v.subtitleLanguages || []).length;
+  const list = [
+    { label: "Upload", state: uploaded ? "done" : "active", detail: uploaded ? "Received" : "Waiting for the file" },
+    { label: "HD video", state: v.processingStatus === "FAILED" ? "failed" : transcoded ? "done" : uploaded ? "active" : "todo",
+      detail: transcoded ? "360p · 720p · 1080p" : uploaded ? "Transcoding…" : "" },
+    { label: "Subtitles", state: v.captionStatus === "FAILED" ? "failed" : captionsDone ? "done" : transcoded ? "active" : "todo",
+      detail: transcoded || captionsDone ? `${languages} of ${LANGUAGES} languages${v.captionStatus === "PARTIAL" ? " (some failed)" : ""}` : "" },
+    { label: "Questions", state: v.objectivesStatus === "FAILED" ? "failed" : questionsDone ? "done" : captionsDone ? "active" : "todo",
+      detail: questionsDone ? `${v.objectiveCount} drafted by ClipSensei` : captionsDone ? "ClipSensei is drafting…" : "" },
+    { label: "Published", state: v.objectivesStatus === "PUBLISHED" ? "done" : questionsDone ? "waiting" : "todo",
+      detail: v.objectivesStatus === "PUBLISHED" ? "Live for learners" : questionsDone ? "Waiting for an educator" : "" },
+  ];
+  // Anything still "active" an hour after upload has stalled - say so instead of spinning forever
+  const minutes = (Date.now() - Date.parse(v.createdAt)) / 60000;
+  const current = list.find((step) => step.state === "active");
+  if (current && minutes > STALL_MINUTES) {
+    current.state = "failed";
+    current.detail = "Stalled - try uploading again";
+  }
+  return list;
+}
+
+const isBusy = (v) => steps(v).some((step) => step.state === "active");
+
+function tracker(v) {
+  const icon = { done: "✓", failed: "!", waiting: "…", active: "", todo: "" };
+  return el("ol", { className: "steps", ariaLabel: `Progress for ${v.title}` },
+    ...steps(v).map((step, i) =>
+      el("li", { className: `step ${step.state}` },
+        el("span", { className: "dot", ariaHidden: "true" }, step.state === "active" ? "" : icon[step.state] || String(i + 1)),
+        el("strong", {}, step.label),
+        el("small", {}, step.detail),
+      )));
 }
 
 // S3 upload with a progress bar. XMLHttpRequest (not fetch) because only XHR reports upload progress.
@@ -45,22 +78,22 @@ function uploadToS3(upload, file, onProgress) {
 
 async function renderUploads(list, isEducator) {
   const { videos } = await api("/videos");
-  list.replaceChildren(...(videos.length ? videos.map((v) => {
-    const [label, tone] = stage(v);
-    return el("article", { className: "teach-item" },
-      el("div", {},
-        el("h3", {}, v.title),
-        el("p", { className: "meta" }, `Uploaded ${new Date(v.createdAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`),
+  list.replaceChildren(...(videos.length ? videos.map((v) =>
+    el("article", { className: "upload-item" },
+      el("div", { className: "upload-head" },
+        el("div", {},
+          el("h3", {}, v.title),
+          el("p", { className: "meta" }, `Uploaded ${new Date(v.createdAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`),
+        ),
+        isEducator && v.objectivesStatus === "DRAFT_READY"
+          ? el("a", { className: "btn", href: `#/teach/review/${encodeURIComponent(v.videoId)}` }, "Review & publish")
+          : null,
       ),
-      el("span", { className: `tag ${tone}` }, label),
-      isEducator && v.objectivesStatus === "DRAFT_READY"
-        ? el("a", { className: "btn", href: `#/teach/review/${encodeURIComponent(v.videoId)}` }, "Review & publish")
-        : null,
-    );
-  }) : [el("p", { className: "meta" }, "No uploads yet.")]));
+      tracker(v),
+    )) : [el("p", { className: "meta" }, "No uploads yet.")]));
   // Keep checking every 15 seconds while anything is still moving through the pipeline
   clearTimeout(pollTimer);
-  if (videos.some((v) => stage(v)[1] === "busy") && location.hash.startsWith("#/create")) {
+  if (videos.some(isBusy) && location.hash.startsWith("#/create")) {
     pollTimer = setTimeout(() => renderUploads(list, isEducator).catch(() => {}), 15000);
   }
 }

@@ -274,3 +274,32 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .tag.bad { border-color: var(--miss); color: var(--miss); }
 .tag.busy { border-color: var(--accent); color: #d6e2ee; }
 
+/* Creator progress tracker: five steps joined by a line */
+.upload-item { background: var(--panel); border-radius: var(--radius); padding: 1rem 1.2rem 1.2rem; }
+.upload-head { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: center; }
+.upload-head h3 { margin: 0; font-size: 1.05rem; }
+.upload-head .meta { margin: 0.2rem 0 0; }
+.upload-head .btn { margin-top: 0; }
+.steps { list-style: none; padding: 0; margin: 1.1rem 0 0; display: grid; grid-template-columns: repeat(5, 1fr); }
+.step { position: relative; display: grid; justify-items: center; text-align: center; gap: 0.25rem; padding: 0 0.3rem; }
+.step::before {                       /* the line joining this step to the previous one */
+  content: ""; position: absolute; top: 15px; right: 50%; width: 100%; height: 3px; background: var(--line); z-index: 0;
+}
+.step:first-child::before { display: none; }
+.step.done::before, .step.active::before, .step.waiting::before { background: var(--accent); }
+.step .dot {
+  position: relative; z-index: 1; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 800; font-size: 0.9rem; background: var(--bg); border: 3px solid var(--line); color: var(--muted);
+}
+.step.done .dot { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.step.active .dot { border-color: var(--accent); border-top-color: transparent; animation: spin 1s linear infinite; }
+.step.waiting .dot { border-color: var(--partial); color: var(--partial); }
+.step.failed .dot { background: var(--miss); border-color: var(--miss); color: var(--bg); }
+.step strong { font-size: 0.9rem; }
+.step small { color: var(--muted); font-size: 0.78rem; min-height: 1.2em; }
+.step.failed small { color: var(--miss); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .step.active .dot { animation: none; border-top-color: var(--accent); } }
+@media (max-width: 620px) { .steps { grid-template-columns: 1fr; gap: 0.6rem; } .step { justify-items: start; text-align: left;
+  grid-template-columns: 32px 1fr; column-gap: 0.7rem; } .step small { grid-column: 2; } .step::before { display: none; } }
+

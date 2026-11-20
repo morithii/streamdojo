@@ -132,8 +132,14 @@ def list_videos(user_id):
         ScanIndexForward=False,                            # newest first
         Limit=50,
     )
-    fields = ["videoId", "title", "createdAt", "processingStatus", "captionStatus", "objectivesStatus"]
-    videos = [{f: item.get(f) for f in fields} for item in result.get("Items", [])]
+    fields = ["videoId", "title", "createdAt", "processingStartedAt", "processingStatus", "captionStatus", "objectivesStatus"]
+    videos = []
+    for item in result.get("Items", []):
+        video = {f: item.get(f) for f in fields}
+        # For the creator's progress tracker: which subtitle languages exist so far, and how many questions
+        video["subtitleLanguages"] = sorted(item.get("subtitleLanguages", set()))     # a DynamoDB set -> JSON list
+        video["objectiveCount"] = int(item.get("objectiveCount", 0))                  # a Decimal -> JSON number
+        videos.append(video)
     return response(200, {"videos": videos})
 
 
