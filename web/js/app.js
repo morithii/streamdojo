@@ -8,7 +8,7 @@
 // =============================================================================
 import { initAuth, signIn, signOut, currentUser } from "./auth.js";
 import { api, setApiBase } from "./api.js";
-import { el, formatDuration } from "./dom.js";
+import { el, formatDuration, sensei } from "./dom.js";
 import { attachStream, stopPlayer } from "./player.js";
 import { runPractice } from "./practice.js";
 
@@ -30,9 +30,12 @@ function renderAccount() {
 function renderLanding() {
   app.replaceChildren(
     el("section", { className: "landing" },
-      el("h1", {}, "Watch a lesson. Practise with ClipSensei. ", el("span", {}, "See what stuck.")),
-      el("p", {}, "Short video lessons, then active recall: you answer from memory, ClipSensei marks each idea with evidence from your own words, and spaced reviews bring back what's fading."),
-      el("button", { className: "btn big", onclick: signIn }, "Sign in to start"),
+      el("div", {},
+        el("h1", {}, "Watch a lesson. Practise with ClipSensei. ", el("span", {}, "See what stuck.")),
+        el("p", {}, "Short video lessons, then active recall: you answer from memory, ClipSensei marks each idea with evidence from your own words, and spaced reviews bring back what's fading."),
+        el("button", { className: "btn big", onclick: signIn }, "Sign in to start"),
+      ),
+      sensei("Welcome to the dojo.", "large"),
     ),
   );
 }
@@ -113,19 +116,25 @@ async function renderWatch(videoId) {
     ...lesson.subtitles.map((sub) => el("option", { value: sub.lang, selected: sub.lang === "en" }, sub.label)),
   );
   const practise = el("button", { className: "btn", onclick: go(`#/practise/${encodeURIComponent(videoId)}`) }, "Practise with ClipSensei");
-  video.addEventListener("ended", () => { practise.textContent = "Lesson finished - practise now"; practise.focus(); });
+  const coach = sensei("Watch closely. Then show me what stuck.");
+  video.addEventListener("ended", () => {
+    coach.querySelector(".bubble").textContent = "Lesson complete. Ready when you are.";
+    practise.focus();
+  });
 
+  // The dojo: shoji screens behind, a wooden floor, a hanging scroll (道場, dōjō: "place of the way")
   app.replaceChildren(
-    el("section", { className: "watch" },
+    el("section", { className: "watch dojo" },
+      el("div", { className: "scroll", ariaHidden: "true" }, el("span", {}, "道"), el("span", {}, "場")),
       el("a", { className: "back", href: "#/" }, "← All lessons"),
-      el("div", { className: "player" }, video),
+      el("div", { className: "player frame" }, video),
       el("div", { className: "watch-bar" },
         el("div", {},
           el("p", { className: "eyebrow" }, lesson.topicName || ""),
           el("h1", {}, lesson.title),
           el("p", { className: "meta" }, `${formatDuration(lesson.durationMs)} · ${lesson.objectiveCount || 0} key idea${lesson.objectiveCount === 1 ? "" : "s"} to practise`),
         ),
-        el("div", { className: "watch-actions" }, el("label", {}, "Subtitles ", picker), practise),
+        el("div", { className: "watch-actions" }, el("label", {}, "Subtitles ", picker), practise, coach),
       ),
     ),
   );

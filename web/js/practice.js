@@ -9,7 +9,7 @@
 //   kind "PRACTICE" - first practice right after watching a lesson
 //   kind "REVIEW"   - spaced-repetition reviews that are due today
 // =============================================================================
-import { el, parseTimestamp, whenFromNow } from "./dom.js";
+import { el, parseTimestamp, whenFromNow, sensei } from "./dom.js";
 import { api } from "./api.js";
 import { attachStream, stopPlayer } from "./player.js";
 
@@ -87,9 +87,9 @@ export function runPractice(app, { queue, kind, heading }) {
         el("p", { className: "eyebrow" }, `${heading} · question ${index + 1} of ${queue.length}`),
         item.title ? el("p", { className: "meta" }, item.title) : null,
         el("h1", { className: "prompt" }, item.prompt),
-        el("p", { className: "meta" }, item.retry
-          ? "Try again with what you've just learned. This try doesn't change your review schedule."
-          : "The video is hidden on purpose: pulling an idea out of memory is what makes it stick."),
+        sensei(item.retry
+          ? "Try again with what you've just learned. This try won't change your review schedule."
+          : "No peeking - the video is hidden on purpose. Pulling an idea out of memory is what makes it stick."),
         answer, hintBox, buttons, status,
       ),
     );
@@ -112,8 +112,11 @@ export function runPractice(app, { queue, kind, heading }) {
         el("p", { className: "eyebrow" }, `${heading} · question ${index + 1} of ${queue.length}`),
         el("h1", { className: "prompt" }, item.prompt),
         el("div", { className: `score ${result.recalledAll ? "good" : ""}` },
-          el("strong", {}, result.recalledAll ? "You recalled every key idea." : `${covered} of ${total} key ideas recalled.`),
-          result.feedback ? el("p", {}, result.feedback) : null,
+          el("img", { src: "/img/clipsensei.svg", alt: "", className: "score-sensei" }),
+          el("div", {},
+            el("strong", {}, result.recalledAll ? "You recalled every key idea." : `${covered} of ${total} key ideas recalled.`),
+            result.feedback ? el("p", {}, result.feedback) : null,
+          ),
         ),
         el("ul", { className: "points" },
           ...result.pointResults.map((p) => {

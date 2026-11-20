@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220" role="img" aria-labelledby="t">
+  <title id="t">ClipSensei, the StreamDojo teaching assistant</title>
+  <!-- Original StreamDojo mascot: friendly older sensei, navy gi, turquoise belt and headband -->
+  <!-- headband tails, behind the head -->
+  <path d="M136 52 q22 2 34 -10 q-6 16 -26 22 z" fill="#2ec4b6"/>
+  <path d="M138 58 q20 10 36 4 q-12 14 -34 6 z" fill="#25a99d"/>
+  <!-- body / gi -->
+  <path d="M42 214 q-2 -66 30 -84 q28 -12 56 0 q32 18 30 84 z" fill="#2a5078"/>
+  <!-- white lapels crossing into a V -->
+  <path d="M82 128 l18 44 l18 -44 l-8 -3 l-10 28 l-10 -28 z" fill="#f3efe6"/>
+  <!-- folded arms (sleeves across the chest) -->
+  <path d="M50 176 q50 -20 100 0 q4 14 -4 20 q-46 -14 -92 0 q-8 -6 -4 -20 z" fill="#33618f"/>
+  <circle cx="60" cy="184" r="9" fill="#f2c9a0"/>
+  <circle cx="140" cy="184" r="9" fill="#f2c9a0"/>
+  <!-- turquoise belt with knot -->
+  <rect x="48" y="198" width="104" height="10" rx="3" fill="#2ec4b6"/>
+  <path d="M96 200 l-10 16 l7 1 l7 -12 l7 12 l7 -1 l-10 -16 z" fill="#25a99d"/>
+  <!-- neck -->
+  <rect x="90" y="112" width="20" height="16" rx="6" fill="#e6b88f"/>
+  <!-- ears -->
+  <ellipse cx="57" cy="78" rx="8" ry="11" fill="#e6b88f"/>
+  <ellipse cx="143" cy="78" rx="8" ry="11" fill="#e6b88f"/>
+  <!-- head -->
+  <circle cx="100" cy="74" r="44" fill="#f2c9a0"/>
+  <!-- headband -->
+  <path d="M57 58 q43 -18 86 0 l-2 12 q-41 -16 -82 0 z" fill="#2ec4b6"/>
+  <!-- bushy white eyebrows -->
+  <path d="M70 74 q11 -9 22 -1" stroke="#ffffff" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M108 73 q11 -8 22 1" stroke="#ffffff" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <!-- calm, smiling closed eyes -->
+  <path d="M74 86 q7 6 14 0" stroke="#0b1a2b" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <path d="M112 86 q7 6 14 0" stroke="#0b1a2b" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <!-- rosy cheeks -->
+  <circle cx="74" cy="98" r="6" fill="#f0a58a" opacity="0.6"/>
+  <circle cx="126" cy="98" r="6" fill="#f0a58a" opacity="0.6"/>
+  <!-- moustache and round white beard -->
+  <path d="M68 100 q32 46 64 0 q-10 30 -32 34 q-22 -4 -32 -34 z" fill="#ffffff"/>
+  <path d="M82 102 q18 -10 36 0 q-18 8 -36 0 z" fill="#eceae4"/>
+  <!-- smile -->
+  <path d="M92 110 q8 6 16 0" stroke="#0b1a2b" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <!-- a small play-button badge on the gi: he's a VIDEO sensei -->
+  <circle cx="126" cy="150" r="9" fill="#2ec4b6"/>
+  <path d="M123 145 l8 5 l-8 5 z" fill="#0b1a2b"/>
+</svg>

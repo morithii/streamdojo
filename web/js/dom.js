@@ -32,3 +32,12 @@ export function whenFromNow(iso) {
   if (days === 1) return "tomorrow";
   return `in ${days} days`;
 }
+
+// ClipSensei, the StreamDojo mascot, with an optional speech bubble
+export function sensei(message, size = "small") {
+  const bubble = message ? el("p", { className: "bubble" }, message) : null;
+  return el("div", { className: `sensei ${size}` },
+    el("img", { src: "/img/clipsensei.svg", alt: "ClipSensei", width: 200, height: 220 }),
+    bubble,
+  );
+}
