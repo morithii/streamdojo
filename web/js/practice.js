@@ -23,7 +23,7 @@ const VERDICTS = {
 // Run a list of questions one after another, then show a summary.
 //   queue: [{ videoId, objectiveId, promptIndex, prompt, timestamp, title? }]
 export function runPractice(app, { queue, kind, heading }) {
-  const results = [];
+  const firstTries = [];      // one result per question: the first attempt only (retries never count)
   let index = 0;
 
   function askQuestion() {
@@ -39,6 +39,7 @@ export function runPractice(app, { queue, kind, heading }) {
 
     async function submit(extra = {}) {
       const dontRemember = Boolean(extra.dontRemember);
+      const retry = Boolean(item.retry);         // after "Try again", EVERY button is a retry - even "I don't remember"
       if (!dontRemember && answer.value.trim().split(/\s+/).length < 3) {
         status.textContent = "Write a little more - at least a sentence - or choose \"I don't remember\".";
         return;
@@ -51,10 +52,10 @@ export function runPractice(app, { queue, kind, heading }) {
           body: {
             videoId: item.videoId, objectiveId: item.objectiveId, promptIndex: item.promptIndex,
             answer: dontRemember ? "" : answer.value, usedHint, dontRemember,
-            retry: Boolean(extra.retry), kind,
+            retry, kind,
           },
         });
-        if (!extra.retry) results.push(result);   // the summary counts first attempts only
+        if (!retry) firstTries[index] = result;
         showResult(item, answer.value, result);
       } catch (error) {
         status.textContent = error.message;
@@ -63,7 +64,7 @@ export function runPractice(app, { queue, kind, heading }) {
     }
 
     const buttons = el("div", { className: "practice-actions" },
-      el("button", { className: "btn", onclick: () => submit(item.retry ? { retry: true } : {}) }, "Check my answer"),
+      el("button", { className: "btn", onclick: () => submit() }, "Check my answer"),
       el("button", {
         className: "btn ghost",
         onclick: async (e) => {
@@ -160,11 +161,15 @@ export function runPractice(app, { queue, kind, heading }) {
 
   function showSummary() {
     stopPlayer();
-    const full = results.filter((r) => r.recalledAll).length;
+    const answered = firstTries.filter(Boolean);
+    const full = answered.filter((r) => r.recalledAll).length;
+    const noun = answered.length === 1 ? "question" : "questions";
     app.replaceChildren(
       el("section", { className: "practice" },
         el("p", { className: "eyebrow" }, heading),
-        el("h1", {}, full === results.length ? "Every idea recalled. Well done." : `${full} of ${results.length} ideas fully recalled.`),
+        el("h1", {}, full === answered.length
+          ? `Every key idea recalled. Well done.`
+          : `${full} of ${answered.length} ${noun} fully recalled on the first try.`),
         el("p", { className: "meta" }, "Ideas you missed come back tomorrow; ideas you recalled come back later and later (1 → 3 → 7 → 14 → 30 days)."),
         el("a", { className: "btn", href: "#/" }, "Back to lessons"),
       ),
