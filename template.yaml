@@ -8,6 +8,7 @@
 #   Step 5  - DynamoDB tables, private upload bucket, POST /videos (presigned upload) + GET /videos
 #   Step 6  - upload event -> EventBridge -> Step Functions (starts exactly once)
 #   Step 7  - MediaConvert: adaptive HLS (360p/720p/1080p), audio for Transcribe, thumbnail
+#   Steps 8-9 - Transcribe (English subtitles + clean transcript) -> Translate (fr, es, it, el)
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -466,6 +467,8 @@ Resources:
         AppTableName: !Ref AppTable
         ProcessedBucketName: !Ref ProcessedBucket
         MediaConvertRoleArn: !GetAtt MediaConvertRole.Arn
+        PrepareTranscriptFunctionArn: !GetAtt PrepareTranscriptFunction.Arn
+        TranslateSubtitlesFunctionArn: !GetAtt TranslateSubtitlesFunction.Arn
       Tracing:
         Enabled: true
       Logging:
@@ -522,6 +525,24 @@ Resources:
                 - xray:GetSamplingRules
                 - xray:GetSamplingTargets
               Resource: "*"
+            - Sid: RunTranscribeJobs        # Transcribe job ARNs aren't known in advance
+              Effect: Allow
+              Action:
+                - transcribe:StartTranscriptionJob
+                - transcribe:GetTranscriptionJob
+              Resource: "*"
+            - Sid: TranscribeReadsAudioWritesTranscript   # Transcribe acts with the caller's S3 permissions
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub ${ProcessedBucket.Arn}/processed/*
+            - Sid: InvokeCaptionFunctions
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt PrepareTranscriptFunction.Arn
+                - !GetAtt TranslateSubtitlesFunction.Arn
       Events:
         VideoUploaded:
           Type: EventBridgeRule
@@ -539,6 +560,66 @@ Resources:
               MaximumEventAgeInSeconds: 3600
             DeadLetterConfig:
               Type: SQS                     # SAM creates the queue; events that can't start the workflow land here
+
+  # ===========================================================================
+  # Steps 8-9: captions - Transcribe (English) then Translate (fr, es, it, el)
+  # ===========================================================================
+
+  # Cleans Transcribe's output for ClipSensei and publishes the English subtitles
+  PrepareTranscriptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-prepare-transcript
+      CodeUri: src/prepare_transcript/
+      Handler: app.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          MEDIA_BUCKET: !Ref ProcessedBucket
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadAndWriteTranscripts
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub ${ProcessedBucket.Arn}/processed/*
+            - Sid: UpdateLessonCaptions
+              Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+
+  # Translates the English subtitles into one language (called 4x in parallel)
+  TranslateSubtitlesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-translate-subtitles
+      CodeUri: src/translate_subtitles/
+      Handler: app.handler
+      Timeout: 300                          # long lessons have many cues
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          MEDIA_BUCKET: !Ref ProcessedBucket
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadEnglishWriteTranslations
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub ${ProcessedBucket.Arn}/processed/*
+            - Sid: Translate                # TranslateText doesn't support resource-level permissions
+              Effect: Allow
+              Action: translate:TranslateText
+              Resource: "*"
+            - Sid: AddSubtitleLanguage
+              Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
 
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need

@@ -1,5 +1,5 @@
 {
-  "Comment": "StreamDojo ProcessVideo: runs once per upload. Step 6 = start exactly once; Step 7 = MediaConvert. Transcribe/Translate/objectives are added in later steps.",
+  "Comment": "StreamDojo ProcessVideo: runs once per upload. Start exactly once -> MediaConvert -> Transcribe -> Translate. ClipSensei objectives are added in a later step.",
   "StartAt": "ParseUploadEvent",
   "States": {
     "ParseUploadEvent": {
@@ -359,7 +359,7 @@
           "Next": "MarkFailed"
         }
       ],
-      "End": true
+      "Next": "StartTranscription"
     },
     "MarkFailed": {
       "Type": "Task",
@@ -404,6 +404,277 @@
       "Type": "Fail",
       "Error": "ProcessingFailed",
       "Cause": "See processingError on the lesson and this execution's history"
+    },
+    "StartTranscription": {
+      "Type": "Task",
+      "Comment": "Speech-to-text on the audio-only file, with English WebVTT subtitles",
+      "Resource": "arn:aws:states:::aws-sdk:transcribe:startTranscriptionJob",
+      "Parameters": {
+        "TranscriptionJobName.$": "States.Format('streamdojo-{}', $.videoId)",
+        "LanguageCode": "en-GB",
+        "Media": {
+          "MediaFileUri.$": "States.Format('s3://${ProcessedBucketName}/processed/{}/audio.m4a', $.videoId)"
+        },
+        "OutputBucketName": "${ProcessedBucketName}",
+        "OutputKey.$": "States.Format('processed/{}/transcript/', $.videoId)",
+        "Subtitles": {
+          "Formats": [
+            "vtt"
+          ],
+          "OutputStartIndex": 1
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.captionError",
+          "Next": "MarkCaptionsFailed"
+        }
+      ],
+      "Next": "WaitForTranscription"
+    },
+    "WaitForTranscription": {
+      "Type": "Wait",
+      "Comment": "Transcribe has no .sync integration, so poll - waiting in Step Functions is free",
+      "Seconds": 20,
+      "Next": "CheckTranscription"
+    },
+    "CheckTranscription": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:transcribe:getTranscriptionJob",
+      "Parameters": {
+        "TranscriptionJobName.$": "States.Format('streamdojo-{}', $.videoId)"
+      },
+      "ResultSelector": {
+        "status.$": "$.TranscriptionJob.TranscriptionJobStatus"
+      },
+      "ResultPath": "$.transcription",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.captionError",
+          "Next": "MarkCaptionsFailed"
+        }
+      ],
+      "Next": "IsTranscriptionDone"
+    },
+    "IsTranscriptionDone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.transcription.status",
+          "StringEquals": "COMPLETED",
+          "Next": "PrepareTranscript"
+        },
+        {
+          "Variable": "$.transcription.status",
+          "StringEquals": "FAILED",
+          "Next": "MarkCaptionsFailed"
+        }
+      ],
+      "Default": "WaitForTranscription"
+    },
+    "PrepareTranscript": {
+      "Type": "Task",
+      "Comment": "Clean transcript for ClipSensei + English subtitles; captionStatus = TRANSCRIBED",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${PrepareTranscriptFunctionArn}",
+        "Payload": {
+          "videoId.$": "$.videoId"
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.captionError",
+          "Next": "MarkCaptionsFailed"
+        }
+      ],
+      "Next": "SetLanguages"
+    },
+    "SetLanguages": {
+      "Type": "Pass",
+      "Result": [
+        "fr",
+        "es",
+        "it",
+        "el"
+      ],
+      "ResultPath": "$.languages",
+      "Next": "TranslateAll"
+    },
+    "TranslateAll": {
+      "Type": "Map",
+      "Comment": "One translation per language, all four at the same time",
+      "ItemsPath": "$.languages",
+      "MaxConcurrency": 4,
+      "ItemSelector": {
+        "videoId.$": "$.videoId",
+        "lang.$": "$$.Map.Item.Value"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "TranslateOne",
+        "States": {
+          "TranslateOne": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${TranslateSubtitlesFunctionArn}",
+              "Payload.$": "$"
+            },
+            "OutputPath": "$.Payload",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "Next": "TranslationFailed"
+              }
+            ],
+            "End": true
+          },
+          "TranslationFailed": {
+            "Type": "Pass",
+            "Result": {
+              "ok": false
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "MarkCaptionsReady"
+    },
+    "MarkCaptionsReady": {
+      "Type": "Task",
+      "Comment": "READY only if all 5 languages exist (en + 4); otherwise PARTIAL",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET captionStatus = :ready",
+        "ConditionExpression": "size(subtitleLanguages) = :all",
+        "ExpressionAttributeValues": {
+          ":ready": {
+            "S": "READY"
+          },
+          ":all": {
+            "N": "5"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Next": "MarkCaptionsPartial"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.captionError",
+          "Next": "MarkCaptionsFailed"
+        }
+      ],
+      "Next": "Done"
+    },
+    "MarkCaptionsPartial": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET captionStatus = :partial",
+        "ExpressionAttributeValues": {
+          ":partial": {
+            "S": "PARTIAL"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Done"
+    },
+    "MarkCaptionsFailed": {
+      "Type": "Task",
+      "Comment": "Captions failed but the video still streams: only captionStatus changes",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET captionStatus = :failed",
+        "ExpressionAttributeValues": {
+          ":failed": {
+            "S": "FAILED"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Done"
+    },
+    "Done": {
+      "Type": "Succeed"
     }
   }
 }

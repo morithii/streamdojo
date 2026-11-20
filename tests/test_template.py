@@ -88,3 +88,13 @@ def test_upload_event_rule_only_watches_raw_prefix_and_has_dead_letter_queue():
 def test_processed_bucket_is_private():
     bucket = load_template()["Resources"]["ProcessedBucket"]["Properties"]
     assert all(bucket["PublicAccessBlockConfiguration"].values())
+
+
+
+def test_caption_functions_exist_with_least_privilege_translate():
+    resources = load_template()["Resources"]
+    translate = resources["TranslateSubtitlesFunction"]["Properties"]
+    actions = [a for s in translate["Policies"][0]["Statement"] for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])]
+    assert "translate:TranslateText" in actions
+    assert "dynamodb:Scan" not in actions
+    assert "PrepareTranscriptFunction" in resources

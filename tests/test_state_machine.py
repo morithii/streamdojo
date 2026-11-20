@@ -37,3 +37,18 @@ def test_every_state_link_points_to_a_real_state():
     for name, state in STATES.items():
         for target in [state.get("Next")] + [c["Next"] for c in state.get("Catch", [])]:
             assert target is None or target in STATES, f"{name} -> {target}"
+
+
+
+def test_caption_failures_never_mark_the_video_failed():
+    # The video is already READY to stream; a captions problem only affects captionStatus
+    for name in ("StartTranscription", "CheckTranscription", "PrepareTranscript"):
+        targets = [c["Next"] for c in STATES[name]["Catch"]]
+        assert targets == ["MarkCaptionsFailed"], name
+    assert STATES["MarkReady"]["Next"] == "StartTranscription"
+
+
+def test_translates_four_languages_in_parallel():
+    assert STATES["SetLanguages"]["Result"] == ["fr", "es", "it", "el"]
+    assert STATES["TranslateAll"]["Type"] == "Map"
+    assert STATES["TranslateAll"]["MaxConcurrency"] == 4
