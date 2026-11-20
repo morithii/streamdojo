@@ -6,6 +6,8 @@
 #   Step 1  - alerts topic
 #   Step 4  - Cognito sign-in (creators / educators / learners) + REST API with GET /me
 #   Step 5  - DynamoDB tables, private upload bucket, POST /videos (presigned upload) + GET /videos
+#   Step 6  - upload event -> EventBridge -> Step Functions (starts exactly once)
+#   Step 7  - MediaConvert: adaptive HLS (360p/720p/1080p), audio for Transcribe, thumbnail
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -383,6 +385,161 @@ Resources:
             Path: /videos
             Method: get
 
+  # ===========================================================================
+  # Steps 6-7: processing pipeline (upload -> EventBridge -> Step Functions -> MediaConvert)
+  # ===========================================================================
+
+  # Private bucket for everything MediaConvert produces (HLS streams, audio, thumbnails)
+  ProcessedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub streamdojo-${Environment}-media-${AWS::AccountId}
+      PublicAccessBlockConfiguration:       # served later through CloudFront only, never publicly
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  ProcessedBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ProcessedBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt ProcessedBucket.Arn
+              - !Sub ${ProcessedBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # The role MediaConvert itself uses: read originals from raw/, write results to processed/
+  MediaConvertRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: mediaconvert.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-raw-write-processed
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ${UploadBucket.Arn}/raw/*
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${ProcessedBucket.Arn}/processed/*
+
+  # Execution history logs (/aws/vendedlogs/ prefix avoids CloudWatch resource-policy size limits)
+  ProcessVideoLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vendedlogs/states/streamdojo-${Environment}-process-video
+      RetentionInDays: 14
+
+  # The workflow. Triggered by EventBridge whenever a file lands under raw/.
+  ProcessVideoStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub streamdojo-${Environment}-process-video
+      Type: STANDARD                        # long-running, exactly-once, full visual history
+      DefinitionUri: statemachine/process_video.asl.json
+      DefinitionSubstitutions:              # fills ${...} placeholders in the JSON definition
+        AppTableName: !Ref AppTable
+        ProcessedBucketName: !Ref ProcessedBucket
+        MediaConvertRoleArn: !GetAtt MediaConvertRole.Arn
+      Tracing:
+        Enabled: true
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false         # don't copy event payloads into logs
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt ProcessVideoLogGroup.Arn
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: UpdateLessonStatus
+              Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+            - Sid: RunMediaConvertJobs
+              Effect: Allow
+              Action:
+                - mediaconvert:CreateJob
+                - mediaconvert:GetJob
+                - mediaconvert:CancelJob
+              Resource: "*"                 # jobs get random IDs, so they can't be named in advance
+            - Sid: PassRoleToMediaConvertOnly
+              Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt MediaConvertRole.Arn
+              Condition:
+                StringEquals:
+                  iam:PassedToService: mediaconvert.amazonaws.com
+            - Sid: SyncIntegrationRule      # .sync uses a managed EventBridge rule to learn when the job ends
+              Effect: Allow
+              Action:
+                - events:PutTargets
+                - events:PutRule
+                - events:DescribeRule
+              Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForMediaConvertJobRule
+            - Sid: WriteExecutionLogs       # these log-delivery actions don't support resource-level permissions
+              Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+            - Sid: XRayTracing
+              Effect: Allow
+              Action:
+                - xray:PutTraceSegments
+                - xray:PutTelemetryRecords
+                - xray:GetSamplingRules
+                - xray:GetSamplingTargets
+              Resource: "*"
+      Events:
+        VideoUploaded:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: [aws.s3]
+              detail-type: [Object Created]
+              detail:
+                bucket:
+                  name: [!Ref UploadBucket]
+                object:
+                  key: [{ prefix: raw/ }]
+            RetryPolicy:
+              MaximumRetryAttempts: 3
+              MaximumEventAgeInSeconds: 3600
+            DeadLetterConfig:
+              Type: SQS                     # SAM creates the queue; events that can't start the workflow land here
+
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need
 # -----------------------------------------------------------------------------
@@ -411,3 +568,10 @@ Outputs:
   UploadBucketName:
     Description: Private bucket for original video uploads
     Value: !Ref UploadBucket
+
+  ProcessedBucketName:
+    Description: Private bucket for HLS streams, audio and thumbnails
+    Value: !Ref ProcessedBucket
+  ProcessVideoStateMachineArn:
+    Description: The video processing workflow
+    Value: !Ref ProcessVideoStateMachine

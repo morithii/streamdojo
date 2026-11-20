@@ -1,0 +1,409 @@
+{
+  "Comment": "StreamDojo ProcessVideo: runs once per upload. Step 6 = start exactly once; Step 7 = MediaConvert. Transcribe/Translate/objectives are added in later steps.",
+  "StartAt": "ParseUploadEvent",
+  "States": {
+    "ParseUploadEvent": {
+      "Type": "Pass",
+      "Comment": "Pull bucket, key and videoId out of the S3 'Object Created' event (key looks like raw/<videoId>.mp4)",
+      "Parameters": {
+        "bucket.$": "$.detail.bucket.name",
+        "key.$": "$.detail.object.key",
+        "videoId.$": "States.ArrayGetItem(States.StringSplit(States.ArrayGetItem(States.StringSplit($.detail.object.key, '/'), 1), '.'), 0)"
+      },
+      "Next": "MarkProcessing"
+    },
+    "MarkProcessing": {
+      "Type": "Task",
+      "Comment": "Idempotency: only move UPLOADING -> PROCESSING. A duplicate event (or a file uploaded without the API) fails the condition and stops here.",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET processingStatus = :processing, processingStartedAt = :now",
+        "ConditionExpression": "processingStatus = :uploading",
+        "ExpressionAttributeValues": {
+          ":processing": {
+            "S": "PROCESSING"
+          },
+          ":uploading": {
+            "S": "UPLOADING"
+          },
+          ":now": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ProvisionedThroughputExceededException",
+            "DynamoDB.RequestLimitExceeded",
+            "DynamoDB.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Next": "AlreadyHandled"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "Transcode"
+    },
+    "AlreadyHandled": {
+      "Type": "Succeed",
+      "Comment": "Duplicate or unknown upload: nothing to do"
+    },
+    "Transcode": {
+      "Type": "Task",
+      "Comment": ".sync: Step Functions starts the MediaConvert job and waits for it to finish - without paying for idle compute",
+      "Resource": "arn:aws:states:::mediaconvert:createJob.sync",
+      "TimeoutSeconds": 3600,
+      "Parameters": {
+        "Role": "${MediaConvertRoleArn}",
+        "UserMetadata": {
+          "videoId.$": "$.videoId"
+        },
+        "StatusUpdateInterval": "SECONDS_60",
+        "Settings": {
+          "TimecodeConfig": {
+            "Source": "ZEROBASED"
+          },
+          "Inputs": [
+            {
+              "FileInput.$": "States.Format('s3://{}/{}', $.bucket, $.key)",
+              "TimecodeSource": "ZEROBASED",
+              "VideoSelector": {},
+              "AudioSelectors": {
+                "Audio Selector 1": {
+                  "DefaultSelection": "DEFAULT"
+                }
+              }
+            }
+          ],
+          "OutputGroups": [
+            {
+              "Name": "HLS adaptive streaming",
+              "OutputGroupSettings": {
+                "Type": "HLS_GROUP_SETTINGS",
+                "HlsGroupSettings": {
+                  "SegmentLength": 6,
+                  "MinSegmentLength": 0,
+                  "Destination.$": "States.Format('s3://${ProcessedBucketName}/processed/{}/hls/index', $.videoId)"
+                }
+              },
+              "Outputs": [
+                {
+                  "NameModifier": "_360p",
+                  "ContainerSettings": {
+                    "Container": "M3U8",
+                    "M3u8Settings": {}
+                  },
+                  "VideoDescription": {
+                    "Width": 640,
+                    "Height": 360,
+                    "CodecSettings": {
+                      "Codec": "H_264",
+                      "H264Settings": {
+                        "RateControlMode": "QVBR",
+                        "QvbrSettings": {
+                          "QvbrQualityLevel": 7
+                        },
+                        "MaxBitrate": 1000000,
+                        "SceneChangeDetect": "TRANSITION_DETECTION",
+                        "GopSize": 2,
+                        "GopSizeUnits": "SECONDS"
+                      }
+                    }
+                  },
+                  "AudioDescriptions": [
+                    {
+                      "CodecSettings": {
+                        "Codec": "AAC",
+                        "AacSettings": {
+                          "Bitrate": 96000,
+                          "CodingMode": "CODING_MODE_2_0",
+                          "SampleRate": 48000
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "NameModifier": "_720p",
+                  "ContainerSettings": {
+                    "Container": "M3U8",
+                    "M3u8Settings": {}
+                  },
+                  "VideoDescription": {
+                    "Width": 1280,
+                    "Height": 720,
+                    "CodecSettings": {
+                      "Codec": "H_264",
+                      "H264Settings": {
+                        "RateControlMode": "QVBR",
+                        "QvbrSettings": {
+                          "QvbrQualityLevel": 7
+                        },
+                        "MaxBitrate": 3000000,
+                        "SceneChangeDetect": "TRANSITION_DETECTION",
+                        "GopSize": 2,
+                        "GopSizeUnits": "SECONDS"
+                      }
+                    }
+                  },
+                  "AudioDescriptions": [
+                    {
+                      "CodecSettings": {
+                        "Codec": "AAC",
+                        "AacSettings": {
+                          "Bitrate": 96000,
+                          "CodingMode": "CODING_MODE_2_0",
+                          "SampleRate": 48000
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "NameModifier": "_1080p",
+                  "ContainerSettings": {
+                    "Container": "M3U8",
+                    "M3u8Settings": {}
+                  },
+                  "VideoDescription": {
+                    "Width": 1920,
+                    "Height": 1080,
+                    "CodecSettings": {
+                      "Codec": "H_264",
+                      "H264Settings": {
+                        "RateControlMode": "QVBR",
+                        "QvbrSettings": {
+                          "QvbrQualityLevel": 7
+                        },
+                        "MaxBitrate": 6000000,
+                        "SceneChangeDetect": "TRANSITION_DETECTION",
+                        "GopSize": 2,
+                        "GopSizeUnits": "SECONDS"
+                      }
+                    }
+                  },
+                  "AudioDescriptions": [
+                    {
+                      "CodecSettings": {
+                        "Codec": "AAC",
+                        "AacSettings": {
+                          "Bitrate": 96000,
+                          "CodingMode": "CODING_MODE_2_0",
+                          "SampleRate": 48000
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "Name": "Audio for Transcribe",
+              "OutputGroupSettings": {
+                "Type": "FILE_GROUP_SETTINGS",
+                "FileGroupSettings": {
+                  "Destination.$": "States.Format('s3://${ProcessedBucketName}/processed/{}/audio', $.videoId)"
+                }
+              },
+              "Outputs": [
+                {
+                  "Extension": "m4a",
+                  "ContainerSettings": {
+                    "Container": "MP4",
+                    "Mp4Settings": {}
+                  },
+                  "AudioDescriptions": [
+                    {
+                      "CodecSettings": {
+                        "Codec": "AAC",
+                        "AacSettings": {
+                          "Bitrate": 96000,
+                          "CodingMode": "CODING_MODE_2_0",
+                          "SampleRate": 48000
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "Name": "Thumbnail",
+              "OutputGroupSettings": {
+                "Type": "FILE_GROUP_SETTINGS",
+                "FileGroupSettings": {
+                  "Destination.$": "States.Format('s3://${ProcessedBucketName}/processed/{}/thumb', $.videoId)"
+                }
+              },
+              "Outputs": [
+                {
+                  "Extension": "jpg",
+                  "ContainerSettings": {
+                    "Container": "RAW"
+                  },
+                  "VideoDescription": {
+                    "Width": 1280,
+                    "Height": 720,
+                    "CodecSettings": {
+                      "Codec": "FRAME_CAPTURE",
+                      "FrameCaptureSettings": {
+                        "FramerateNumerator": 1,
+                        "FramerateDenominator": 5,
+                        "MaxCaptures": 1,
+                        "Quality": 80
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "ResultSelector": {
+        "durationMs.$": "$.Job.OutputGroupDetails[0].OutputDetails[0].DurationInMs"
+      },
+      "ResultPath": "$.transcode",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "MarkReady"
+    },
+    "MarkReady": {
+      "Type": "Task",
+      "Comment": "Record where the playable files are. The lesson can now stream.",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET processingStatus = :ready, hlsPath = :hls, audioPath = :audio, thumbnailPath = :thumb, durationMs = :duration, processedAt = :now",
+        "ExpressionAttributeValues": {
+          ":ready": {
+            "S": "READY"
+          },
+          ":hls": {
+            "S.$": "States.Format('processed/{}/hls/index.m3u8', $.videoId)"
+          },
+          ":audio": {
+            "S.$": "States.Format('processed/{}/audio.m4a', $.videoId)"
+          },
+          ":thumb": {
+            "S.$": "States.Format('processed/{}/thumb.0000000.jpg', $.videoId)"
+          },
+          ":duration": {
+            "N.$": "States.Format('{}', $.transcode.durationMs)"
+          },
+          ":now": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ProvisionedThroughputExceededException",
+            "DynamoDB.RequestLimitExceeded",
+            "DynamoDB.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkFailed"
+        }
+      ],
+      "End": true
+    },
+    "MarkFailed": {
+      "Type": "Task",
+      "Comment": "Any failure: record it on the lesson so the creator sees FAILED instead of a lesson stuck in PROCESSING",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET processingStatus = :failed, processingError = :error",
+        "ExpressionAttributeValues": {
+          ":failed": {
+            "S": "FAILED"
+          },
+          ":error": {
+            "S.$": "$.error.Error"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ProvisionedThroughputExceededException",
+            "DynamoDB.RequestLimitExceeded",
+            "DynamoDB.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "ProcessingFailed"
+    },
+    "ProcessingFailed": {
+      "Type": "Fail",
+      "Error": "ProcessingFailed",
+      "Cause": "See processingError on the lesson and this execution's history"
+    }
+  }
+}

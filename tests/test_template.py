@@ -76,3 +76,15 @@ def test_tables_have_point_in_time_recovery():
     resources = load_template()["Resources"]
     for name in ("AppTable", "AnswerKeysTable"):
         assert resources[name]["Properties"]["PointInTimeRecoverySpecification"]["PointInTimeRecoveryEnabled"]
+
+
+
+def test_upload_event_rule_only_watches_raw_prefix_and_has_dead_letter_queue():
+    event = load_template()["Resources"]["ProcessVideoStateMachine"]["Properties"]["Events"]["VideoUploaded"]["Properties"]
+    assert event["Pattern"]["detail"]["object"]["key"] == [{"prefix": "raw/"}]
+    assert event["DeadLetterConfig"]["Type"] == "SQS"
+
+
+def test_processed_bucket_is_private():
+    bucket = load_template()["Resources"]["ProcessedBucket"]["Properties"]
+    assert all(bucket["PublicAccessBlockConfiguration"].values())
