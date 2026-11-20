@@ -6,6 +6,11 @@
   <title>StreamDojo</title>
   <meta name="description" content="Watch a lesson. Practise with ClipSensei. See what stuck.">
   <link rel="stylesheet" href="/css/app.css">
+  <!-- hls.js plays HLS video in browsers without native HLS (Chrome, Firefox, Edge).
+       integrity= is a SHA-384 hash of the exact file: if the CDN ever served anything else, the browser refuses to run it. -->
+  <script defer src="https://cdn.jsdelivr.net/npm/hls.js@1.7.4/dist/hls.min.js"
+          integrity="sha384-p9vgU/7IYJWd3I4STrtqxqR/2cAQlhIX7D/HrTnIMEjjcUox165b7se7sxmm3zDg"
+          crossorigin="anonymous"></script>
   <!-- type="module": modern JavaScript with import/export, deferred until the page has loaded -->
   <script type="module" src="/js/app.js"></script>
 </head>

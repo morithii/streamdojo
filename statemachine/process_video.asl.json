@@ -275,7 +275,7 @@
                       "FrameCaptureSettings": {
                         "FramerateNumerator": 1,
                         "FramerateDenominator": 5,
-                        "MaxCaptures": 1,
+                        "MaxCaptures": 2,
                         "Quality": 80
                       }
                     }
@@ -327,7 +327,7 @@
             "S.$": "States.Format('processed/{}/audio.m4a', $.videoId)"
           },
           ":thumb": {
-            "S.$": "States.Format('processed/{}/thumb.0000000.jpg', $.videoId)"
+            "S.$": "States.Format('processed/{}/thumb.0000001.jpg', $.videoId)"
           },
           ":duration": {
             "N.$": "States.Format('{}', $.transcode.durationMs)"

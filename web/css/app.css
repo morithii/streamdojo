@@ -73,3 +73,18 @@ main { padding-bottom: 4rem; }
 .card-text { padding: 0.6rem 0.8rem 0.8rem; }
 .card h3 { font-size: 0.95rem; margin: 0; }
 .card p { font-size: 0.8rem; color: var(--muted); margin: 0.2rem 0 0; }
+
+/* Player page */
+.hero .btn { margin-top: 1rem; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+.watch { padding: 1rem clamp(1rem, 4vw, 3rem); max-width: 1200px; margin: 0 auto; }
+.back { color: var(--muted); text-decoration: none; display: inline-block; margin-bottom: 0.8rem; }
+.back:hover { color: var(--accent); }
+.player { background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 16 / 9; }
+.player video { width: 100%; height: 100%; display: block; }
+.watch-bar { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: flex-end; margin-top: 1.2rem; }
+.watch-bar h1 { font-size: clamp(1.4rem, 3vw, 2rem); }
+.meta { color: var(--muted); margin: 0; }
+.watch-actions { display: flex; gap: 1rem; align-items: center; color: var(--muted); }
+.picker { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 0.4rem 0.6rem; }
+::cue { background: rgba(11, 26, 43, 0.8); }

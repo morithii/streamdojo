@@ -60,3 +60,9 @@ def test_clipsensei_runs_after_captions_and_its_failure_is_contained():
     assert STATES["MarkCaptionsPartial"]["Next"] == "GenerateObjectives"
     assert [c["Next"] for c in STATES["GenerateObjectives"]["Catch"]] == ["MarkObjectivesFailed"]
     assert STATES["MarkObjectivesFailed"]["Next"] == "Done"
+
+
+def test_thumbnail_is_taken_five_seconds_in_not_the_black_first_frame():
+    text = json.dumps(ASL)
+    assert '"MaxCaptures": 2' in text and '"FramerateDenominator": 5' in text   # frames at 0s and 5s
+    assert "thumb.0000001.jpg" in text and "thumb.0000000.jpg" not in text      # use the 5s one
