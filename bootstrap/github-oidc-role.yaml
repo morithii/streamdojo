@@ -1,6 +1,8 @@
 # =============================================================================
 # StreamDojo bootstrap: lets GitHub Actions deploy to AWS without access keys.
-# Deployed ONCE, by hand. Creates:
+#
+# Deployed ONCE, by hand, from your laptop (not by the pipeline itself).
+# Creates:
 #   1. (optional) the GitHub OIDC identity provider - only one per account
 #   2. GitHubDeployRole   - assumed by GitHub Actions; can ONLY drive CloudFormation
 #   3. CloudFormationExecutionRole - assumed by CloudFormation; creates the actual resources
@@ -9,12 +11,13 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: StreamDojo - GitHub Actions OIDC deploy role and CloudFormation execution role
 
 Parameters:
-  GitHubOrg:
+  # GitHub now sends "immutable" subject claims that include the numeric owner
+  # and repository IDs (check with: gh api repos/OWNER/REPO/actions/oidc/customization/sub).
+  # Matching the IDs means a deleted-and-recreated repo with the same name can't deploy.
+  SubjectPrefix:
     Type: String
-    Default: morithii
-  RepositoryName:
-    Type: String
-    Default: streamdojo
+    Default: repo:morithii@77978732/streamdojo@1464276698
+    Description: The sub_claim_prefix GitHub reports for this repository
   Branch:
     Type: String
     Default: main
@@ -22,13 +25,15 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-    Description: Set to true only if this account has no GitHub OIDC provider yet
+    Description: Set to true only if this account has no GitHub OIDC provider yet (an account can only have one)
 
 Conditions:
   ShouldCreateProvider: !Equals [!Ref CreateOIDCProvider, "true"]
 
 Resources:
+  # ---------------------------------------------------------------------------
   # 1. GitHub's identity provider: lets AWS trust tokens signed by GitHub
+  # ---------------------------------------------------------------------------
   GitHubOIDCProvider:
     Type: AWS::IAM::OIDCProvider
     Condition: ShouldCreateProvider
@@ -37,7 +42,12 @@ Resources:
       ClientIdList: [sts.amazonaws.com]
       ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
 
-  # 2. Role GitHub Actions assumes: can only drive CloudFormation for streamdojo-* stacks
+  # ---------------------------------------------------------------------------
+  # 2. Role GitHub Actions assumes. Deliberately narrow: it can create and
+  #    execute CloudFormation change sets for streamdojo-* stacks, upload
+  #    build artifacts to the SAM bucket, and hand the execution role to
+  #    CloudFormation. It cannot create Lambda functions, buckets etc. itself.
+  # ---------------------------------------------------------------------------
   GitHubDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -52,9 +62,10 @@ Resources:
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
-                # token must be meant for AWS STS, and come from THIS repo's main branch only
+                # the token must be meant for AWS STS...
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${RepositoryName}:ref:refs/heads/${Branch}
+                # ...and come from THIS repo's main branch only (not forks, PRs or other branches)
+                token.actions.githubusercontent.com:sub: !Sub ${SubjectPrefix}:ref:refs/heads/${Branch}
       Policies:
         - PolicyName: sam-deploy
           PolicyDocument:
@@ -104,8 +115,12 @@ Resources:
                   StringEquals:
                     iam:PassedToService: cloudformation.amazonaws.com
 
-  # 3. Role CloudFormation uses to create resources: everything except IAM,
-  #    plus IAM only for roles named streamdojo-*
+  # ---------------------------------------------------------------------------
+  # 3. Role CloudFormation uses to create the stack's resources.
+  #    PowerUserAccess covers every service EXCEPT IAM; IAM is then allowed
+  #    only for roles whose names start with streamdojo- (SAM names generated
+  #    roles after the stack, e.g. streamdojo-dev-UploadFunctionRole-AB12).
+  # ---------------------------------------------------------------------------
   CloudFormationExecutionRole:
     Type: AWS::IAM::Role
     Properties:
