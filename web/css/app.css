@@ -1,11 +1,14 @@
-/* StreamDojo - dark, cinematic, one warm accent (the dojo's red) */
+/* StreamDojo - Lyfta-style palette: deep navy, turquoise accent, white text.
+   Change the brand here; everything else uses these variables. */
 :root {
-  --bg: #0e0f13;
-  --panel: #181a21;
-  --text: #f2f2f4;
-  --muted: #9a9cab;
-  --accent: #e5484d;
-  --radius: 10px;
+  --bg: #0b1a2b;          /* deep navy page */
+  --panel: #13283d;       /* cards and panels */
+  --line: #24405c;        /* borders */
+  --text: #ffffff;
+  --muted: #9fb3c8;       /* secondary text (contrast 8:1 on --bg) */
+  --accent: #2ec4b6;      /* turquoise: buttons, highlights, focus */
+  --on-accent: #0b1a2b;   /* text on turquoise: navy 8:1, white would only be 2.2:1 */
+  --radius: 12px;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: dark;
 }
@@ -17,7 +20,7 @@ h1, h2, h3 { line-height: 1.15; margin: 0 0 0.5rem; }
   position: sticky; top: 0; z-index: 10;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0.9rem clamp(1rem, 4vw, 3rem);
-  background: linear-gradient(var(--bg), rgba(14, 15, 19, 0.85));
+  background: linear-gradient(var(--bg), rgba(11, 26, 43, 0.85));
   backdrop-filter: blur(6px);
 }
 .logo { font-weight: 800; font-size: 1.4rem; color: var(--text); text-decoration: none; letter-spacing: -0.02em; }
@@ -29,15 +32,15 @@ h1, h2, h3 { line-height: 1.15; margin: 0 0 0.5rem; }
 .btn {
   font: inherit; font-weight: 600; cursor: pointer;
   padding: 0.55rem 1.1rem; border-radius: 999px; border: 0;
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent);
 }
 .btn:hover { filter: brightness(1.1); }
-.btn.ghost { background: transparent; border: 1px solid #3a3d4a; color: var(--text); }
+.btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
 .btn.big { padding: 0.8rem 1.6rem; font-size: 1.05rem; }
 
 main { padding-bottom: 4rem; }
 .loading, .empty, .error { padding: 3rem clamp(1rem, 4vw, 3rem); color: var(--muted); }
-.error { color: #ff8b8e; }
+.error { color: #ff9b8f; }
 
 .landing { max-width: 46rem; padding: 12vh clamp(1rem, 4vw, 3rem); }
 .landing h1 { font-size: clamp(2rem, 5vw, 3.4rem); letter-spacing: -0.03em; }
@@ -47,11 +50,11 @@ main { padding-bottom: 4rem; }
 .hero {
   min-height: 46vh; display: flex; align-items: flex-end;
   padding: 2rem clamp(1rem, 4vw, 3rem);
-  background: linear-gradient(to top, var(--bg) 5%, rgba(14, 15, 19, 0.2) 60%), var(--hero) center / cover no-repeat, var(--panel);
+  background: linear-gradient(to top, var(--bg) 5%, rgba(11, 26, 43, 0.2) 60%), var(--hero) center / cover no-repeat, var(--panel);
 }
 .hero-text { max-width: 40rem; }
 .hero h1 { font-size: clamp(1.8rem, 4vw, 3rem); }
-.hero p { color: #cfd0d8; margin: 0; }
+.hero p { color: #d6e2ee; margin: 0; }
 .eyebrow { color: var(--accent) !important; font-weight: 700; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.08em; }
 
 .row { padding: 1.5rem clamp(1rem, 4vw, 3rem) 0; }
@@ -66,7 +69,7 @@ main { padding-bottom: 4rem; }
   outline: 2px solid transparent;
 }
 .card:hover, .card:focus-visible { transform: scale(1.03); outline-color: var(--accent); }
-.card img, .thumb-missing { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #23252f; }
+.card img, .thumb-missing { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--line); }
 .card-text { padding: 0.6rem 0.8rem 0.8rem; }
 .card h3 { font-size: 0.95rem; margin: 0; }
 .card p { font-size: 0.8rem; color: var(--muted); margin: 0.2rem 0 0; }
