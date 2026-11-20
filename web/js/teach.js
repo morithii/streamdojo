@@ -188,11 +188,31 @@ export async function renderReview(app, videoId) {
       )
     : null;
 
+  // Lesson title: the uploader's title may not match what the video teaches
+  const titleInput = el("input", { value: lesson.title || "", className: "title-input", ariaLabel: "Lesson title" });
+  const titleStatus = el("span", { className: "status", role: "status" });
+  const saveTitle = async () => {
+    titleStatus.textContent = "Saving…";
+    try {
+      await api(`/lessons/${enc(videoId)}`, { method: "PUT", body: { title: titleInput.value } });
+      titleStatus.textContent = "Title saved.";
+    } catch (error) {
+      titleStatus.textContent = error.message;
+    }
+  };
+  const suggestion = lesson.suggestedTitle && lesson.suggestedTitle !== lesson.title
+    ? el("p", { className: "meta" }, "ClipSensei suggests: ", el("strong", {}, lesson.suggestedTitle), " ",
+        el("button", { className: "btn ghost small", onclick: () => { titleInput.value = lesson.suggestedTitle; saveTitle(); } }, "Use this"))
+    : null;
+
   app.replaceChildren(
     el("section", { className: "teach" },
       el("a", { className: "back", href: "#/teach" }, "← Educator dashboard"),
       el("p", { className: "eyebrow" }, isDraft ? "Review ClipSensei's draft" : "Edit live objectives"),
-      el("h1", {}, lesson.title || "Untitled lesson"),
+      el("div", { className: "row-input" }, titleInput,
+        el("button", { className: "btn ghost", onclick: saveTitle }, "Save title")),
+      titleStatus,
+      suggestion,
       sensei(isDraft
         ? "I drafted these from the transcript. Check each key idea is a different idea - that's what makes the marking fair."
         : "These are live. Edits apply to the next attempt; learners' schedules are kept."),

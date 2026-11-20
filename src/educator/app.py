@@ -2,6 +2,7 @@
 
 GET  /lessons?status=DRAFT                            lessons waiting for review (oldest first)
 GET  /lessons/{videoId}/objectives                    objectives with prompts AND answer keys
+PUT  /lessons/{videoId}                 {"title": ...}  rename the lesson
 PUT  /lessons/{videoId}/objectives/{objectiveId}      save the educator's edits
 POST /lessons/{videoId}/objectives                    add an objective ClipSensei didn't pick (max 5)
 DELETE /lessons/{videoId}/objectives/{objectiveId}    remove a weak draft objective (drafts only, keep at least 1)
@@ -74,7 +75,7 @@ def get_objectives(video_id):
                            "timestamp": p["timestamp"], "status": p["status"],
                            "essentialPoints": k.get("essentialPoints", []), "modelAnswer": k.get("modelAnswer"),
                            "hint": k.get("hint")})
-    return response(200, {"videoId": video_id, "title": lesson.get("title"),
+    return response(200, {"videoId": video_id, "title": lesson.get("title"), "suggestedTitle": lesson.get("suggestedTitle"),
                           "objectivesStatus": lesson.get("objectivesStatus"), "objectives": objectives})
 
 
@@ -109,6 +110,22 @@ def update_objective(video_id, objective_id, body, user_id):
         ExpressionAttributeValues={":e": [{"pointId": f"p{i}", "text": p.strip()} for i, p in enumerate(body["essentialPoints"], 1)],
                                    ":m": body["modelAnswer"].strip(), ":h": body["hint"].strip()})
     return response(200, {"message": "Saved", "objectiveId": objective_id})
+
+
+def rename_lesson(video_id, body, user_id):
+    title = str(body.get("title", "")).strip()
+    if not 3 <= len(title) <= 120:
+        return response(400, {"message": "title must be 3-120 characters"})
+    lesson_key = {"PK": f"VIDEO#{video_id}", "SK": "META"}
+    lesson = table(TABLE_NAME).get_item(Key=lesson_key).get("Item")
+    if not lesson:
+        return response(404, {"message": "Lesson not found"})
+    table(TABLE_NAME).update_item(Key=lesson_key, UpdateExpression="SET title = :t, editedBy = :u, editedAt = :at",
+                                  ExpressionAttributeValues={":t": title, ":u": user_id, ":at": now()})
+    if lesson.get("topicId"):                   # the topic's lesson list keeps a copy of the title too
+        table(TABLE_NAME).update_item(Key={"PK": f"TOPIC#{lesson['topicId']}", "SK": f"LESSON#{video_id}"},
+                                      UpdateExpression="SET title = :t", ExpressionAttributeValues={":t": title})
+    return response(200, {"message": "Renamed", "title": title})
 
 
 def lesson_objectives(video_id):
@@ -215,6 +232,8 @@ def handler(event, context):
         return get_objectives(params["videoId"])
     if route == "PUT /lessons/{videoId}/objectives/{objectiveId}":
         return update_objective(params["videoId"], params["objectiveId"], body, user_id)
+    if route == "PUT /lessons/{videoId}":
+        return rename_lesson(params["videoId"], body, user_id)
     if route == "POST /lessons/{videoId}/objectives":
         return add_objective(params["videoId"], body, user_id)
     if route == "DELETE /lessons/{videoId}/objectives/{objectiveId}":

@@ -38,6 +38,7 @@ only if the lesson genuinely teaches fewer distinct ideas - never pad with weak 
 - timestamp: the mm:ss where the idea is taught, copied from the transcript.
 - prompts: exactly 3 different open questions testing the same idea in different ways
   (for example "Why ...?", "What would happen if ...?", "Explain to a colleague ..."). Never multiple choice or yes/no.
+Also suggest a clear lesson title (at most 8 words) that says what the lesson actually teaches.
 Use only what the transcript says. Save the result with the save_objectives tool."""
 
 OBJECTIVE_SCHEMA = {
@@ -57,7 +58,8 @@ TOOL = {"toolSpec": {
     "description": "Save the learning objectives for this lesson.",
     "inputSchema": {"json": {
         "type": "object",
-        "properties": {"objectives": {"type": "array", "items": OBJECTIVE_SCHEMA, "minItems": 1, "maxItems": MAX_OBJECTIVES}},
+        "properties": {"objectives": {"type": "array", "items": OBJECTIVE_SCHEMA, "minItems": 1, "maxItems": MAX_OBJECTIVES},
+                       "suggestedTitle": {"type": "string", "description": "a clear lesson title, at most 8 words"}},
         "required": ["objectives"],
     }},
 }}
@@ -172,11 +174,12 @@ def handler(event, context):
     table(TABLE_NAME).update_item(
         Key=lesson_key,
         UpdateExpression=("SET objectivesStatus = :draft, objectiveCount = :n, generationModel = :m, "
-                          "inputTokens = :in, outputTokens = :out, GSI1PK = :drafts, GSI1SK = :sk"),
+                          "inputTokens = :in, outputTokens = :out, GSI1PK = :drafts, GSI1SK = :sk, suggestedTitle = :st"),
         ExpressionAttributeValues={
             ":draft": "DRAFT_READY", ":n": len(data["objectives"]), ":m": MODEL_ID,
             ":in": tokens_in, ":out": tokens_out, ":drafts": "DRAFTS",
             ":sk": f"{lesson['createdAt']}#{video_id}",
+            ":st": str(data.get("suggestedTitle") or "").strip()[:120],   # the educator decides whether to use it
         },
     )
     return {"videoId": video_id, "objectives": len(data["objectives"]), "inputTokens": tokens_in, "outputTokens": tokens_out}

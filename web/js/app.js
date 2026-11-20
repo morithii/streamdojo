@@ -22,8 +22,8 @@ function renderAccount() {
   const user = currentUser();
   const isEducator = user && user.groups.includes("educators");
   account.replaceChildren(
-    isEducator ? el("a", { className: "btn ghost", href: "#/teach" }, "Educator") : "",
     user ? el("span", { className: "who" }, user.name, el("small", {}, user.groups.join(" · "))) : "",
+    isEducator ? el("a", { className: "btn ghost", href: "#/teach" }, "Educator") : "",
     user
       ? el("button", { className: "btn ghost", onclick: signOut }, "Sign out")
       : el("button", { className: "btn", onclick: signIn }, "Sign in"),
@@ -88,6 +88,9 @@ async function renderHome() {
         el("p", {}, `${formatDuration(featured.durationMs)} · practise with ClipSensei after watching`),
         el("button", { className: "btn big", onclick: watch(featured.videoId) }, "▶ Watch"),
       ),
+      sensei(reviews.length
+        ? `Welcome back. ${reviews.length} idea${reviews.length === 1 ? " is" : "s are"} ready for review - let's keep them fresh.`
+        : "Pick a lesson, watch closely, then show me what stuck.", "large"),
     ),
     reviewsBanner(reviews) || "",
     ...rows.map((row) =>

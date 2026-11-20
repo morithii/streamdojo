@@ -760,6 +760,12 @@ Resources:
             RestApiId: !Ref StreamDojoApi
             Path: /lessons/{videoId}/objectives
             Method: post
+        RenameLesson:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons/{videoId}
+            Method: put
         DeleteObjective:
           Type: Api
           Properties:

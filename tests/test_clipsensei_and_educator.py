@@ -219,3 +219,23 @@ def test_remove_only_drafts_and_never_the_last_objective():
     published, _, _ = setup_educator(objectives_status="PUBLISHED")
     res = published.handler(educator_event("educators", "DELETE", route, {"videoId": "v1", "objectiveId": "obj1"}), None)
     assert res["statusCode"] == 409                                              # learners may have reviews scheduled
+
+
+def test_educator_renames_a_published_lesson_everywhere():
+    edu, app, _ = setup_educator(objectives_status="PUBLISHED")
+    app.items[("VIDEO#v1", "META")]["topicId"] = "careers"
+    app.put_item(Item={"PK": "TOPIC#careers", "SK": "LESSON#v1", "title": "Old"})
+    res = edu.handler(educator_event("educators", "PUT", "/lessons/{videoId}", {"videoId": "v1"},
+                                     {"title": "Why a capstone project gets you hired"}), None)
+    assert res["statusCode"] == 200
+    assert app.items[("VIDEO#v1", "META")]["title"] == "Why a capstone project gets you hired"
+    assert app.items[("TOPIC#careers", "LESSON#v1")]["title"] == "Why a capstone project gets you hired"
+    bad = edu.handler(educator_event("educators", "PUT", "/lessons/{videoId}", {"videoId": "v1"}, {"title": "x"}), None)
+    assert bad["statusCode"] == 400
+
+
+def test_clipsensei_suggests_a_title():
+    gen, app, _ = setup_generator({**GOOD, "suggestedTitle": "Keeping S3 private with OAC"})
+    gen.handler({"videoId": "v1"}, None)
+    assert app.items[("VIDEO#v1", "META")]["suggestedTitle"] == "Keeping S3 private with OAC"
+
