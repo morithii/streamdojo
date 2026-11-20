@@ -43,3 +43,20 @@ def test_alert_email_is_not_hardcoded():
     # The email must come in as a parameter (from a secret), never be committed
     params = load_template()["Parameters"]
     assert params["AlertEmail"]["Default"] == ""
+
+
+def test_api_requires_cognito_by_default():
+    auth = load_template()["Resources"]["StreamDojoApi"]["Properties"]["Auth"]
+    assert auth["DefaultAuthorizer"] == "CognitoAuthorizer"
+
+
+def test_web_client_has_no_secret_and_uses_code_flow():
+    client = load_template()["Resources"]["UserPoolClient"]["Properties"]
+    assert client["GenerateSecret"] is False
+    assert client["AllowedOAuthFlows"] == ["code"]
+
+
+def test_three_groups_exist():
+    resources = load_template()["Resources"]
+    names = {r["Properties"]["GroupName"] for r in resources.values() if r["Type"] == "AWS::Cognito::UserPoolGroup"}
+    assert names == {"creators", "educators", "learners"}

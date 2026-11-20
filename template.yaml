@@ -2,9 +2,9 @@
 # StreamDojo: Netflix-style video learning platform
 # with ClipSensei, the AI teaching assistant (active recall + spaced repetition)
 #
-# Step 1: project skeleton. The only resource is the SNS alerts topic, which
-# later steps (alarms, budget) will publish to. Everything else is added
-# one exercise at a time.
+# Built one exercise at a time:
+#   Step 1  - alerts topic
+#   Step 4  - Cognito sign-in (creators / educators / learners) + REST API with GET /me
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -23,12 +23,17 @@ Parameters:
     Type: String
     Default: ""
     Description: Email address for alarm and budget alerts (leave empty to skip the subscription)
+  FrontendUrl:
+    Type: String
+    Default: http://localhost:8080
+    Description: Where the web app runs; Cognito only redirects back to this address after sign-in
 
 # -----------------------------------------------------------------------------
 # Conditions: only subscribe an email when one was actually provided
 # -----------------------------------------------------------------------------
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+  IsDev: !Equals [!Ref Environment, dev]
 
 # -----------------------------------------------------------------------------
 # Globals: defaults applied to every Lambda function and API we add later,
@@ -71,6 +76,163 @@ Resources:
       Protocol: email
       Endpoint: !Ref AlertEmail
 
+  # ===========================================================================
+  # Step 4: sign-in with Amazon Cognito
+  # ===========================================================================
+
+  # The user directory: who can sign in, and how
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub streamdojo-${Environment}-users
+      UserPoolTier: LITE                    # cheapest tier; enough for the classic hosted sign-in page
+      UsernameAttributes: [email]           # people sign in with their email address
+      AutoVerifiedAttributes: [email]       # Cognito emails a code to prove the address is real
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false     # self sign-up is allowed (new users become learners)
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 3
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Schema:
+        - Name: name                        # display name shown to educators (never the email)
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      DeletionProtection: INACTIVE          # dev: lets us tear the stack down; set ACTIVE in prod
+
+  # The web app's "app client". A browser can't keep a secret, so there is none;
+  # it uses the authorization code flow with PKCE instead (the secure option for SPAs).
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub streamdojo-${Environment}-web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: [!Sub "${FrontendUrl}/"]
+      LogoutURLs: [!Sub "${FrontendUrl}/"]
+      # USER_PASSWORD_AUTH lets us get a token from the CLI for testing - dev only
+      ExplicitAuthFlows: !If
+        - IsDev
+        - [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_PASSWORD_AUTH]
+        - [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED   # don't reveal whether an email has an account
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  # Hosted sign-in page at https://streamdojo-dev-<account>.auth.eu-west-2.amazoncognito.com
+  # (the account ID makes the prefix globally unique)
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub streamdojo-${Environment}-${AWS::AccountId}
+      UserPoolId: !Ref UserPool
+      ManagedLoginVersion: 1                # classic hosted UI: no branding resource needed
+
+  # The three roles. Groups appear in every token as "cognito:groups",
+  # which is how each API function decides what the caller may do.
+  CreatorsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: creators
+      Description: Upload lesson videos
+      Precedence: 2
+  EducatorsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: educators
+      Description: Review and publish learning objectives; see recall insights
+      Precedence: 1
+  LearnersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: learners
+      Description: Watch lessons, practise recall, do reviews and gradings
+      Precedence: 3
+
+  # Runs once when someone confirms their sign-up and puts them in "learners".
+  # Creators and educators are promoted by an admin, never by themselves.
+  PostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-post-confirmation
+      CodeUri: src/post_confirmation/
+      Handler: app.handler
+      Timeout: 5
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: cognito-idp:AdminAddUserToGroup
+              # userpool/* rather than the pool's own ARN: the pool references this
+              # function as its trigger, so referencing the pool here would be circular
+              Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+      Events:
+        SignUpConfirmed:
+          Type: Cognito                     # SAM wires the trigger and the invoke permission
+          Properties:
+            UserPool: !Ref UserPool
+            Trigger: PostConfirmation
+
+  # ===========================================================================
+  # Step 4: the REST API. Every route requires a valid Cognito token by default.
+  # ===========================================================================
+  StreamDojoApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub streamdojo-${Environment}-api
+      StageName: !Ref Environment
+      Cors:
+        AllowOrigin: !Sub "'${FrontendUrl}'"
+        AllowHeaders: "'Authorization,Content-Type'"
+        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false   # browsers send OPTIONS without a token
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt UserPool.Arn   # API Gateway checks the ID token's signature and expiry
+
+  # GET /me - who am I, and which groups am I in? The frontend uses this to pick
+  # which view to show; it's also the simplest proof that sign-in works end to end.
+  MeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-me
+      CodeUri: src/me/
+      Handler: app.handler
+      Timeout: 5
+      Environment:
+        Variables:
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Events:
+        GetMe:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /me
+            Method: get
+
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need
 # -----------------------------------------------------------------------------
@@ -78,3 +240,15 @@ Outputs:
   AlertsTopicArn:
     Description: SNS topic that receives StreamDojo alerts
     Value: !Ref AlertsTopic
+  ApiUrl:
+    Description: Base URL of the StreamDojo REST API
+    Value: !Sub https://${StreamDojoApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+  UserPoolId:
+    Description: Cognito user pool ID
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Description: Cognito app client ID for the web app
+    Value: !Ref UserPoolClient
+  HostedLoginUrl:
+    Description: Cognito hosted sign-in page
+    Value: !Sub https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=code&scope=openid+email+profile&redirect_uri=${FrontendUrl}/

@@ -2,3 +2,4 @@
 pytest==8.3.4
 cfn-lint==1.22.2
 PyYAML==6.0.2
+boto3==1.35.90   # Lambda already includes boto3; listed here so unit tests can import it
