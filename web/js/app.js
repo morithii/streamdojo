@@ -122,16 +122,14 @@ async function renderWatch(videoId) {
     ...lesson.subtitles.map((sub) => el("option", { value: sub.lang, selected: sub.lang === "en" }, sub.label)),
   );
   const practise = el("button", { className: "btn", onclick: go(`#/practise/${encodeURIComponent(videoId)}`) }, "Practise with ClipSensei");
-  const coach = sensei("Watch closely. Then show me what stuck.");
+  const coach = sensei("Show me what you have learned.");
   video.addEventListener("ended", () => {
     coach.querySelector(".bubble").textContent = "Lesson complete. Ready when you are.";
     practise.focus();
   });
 
-  // The dojo: shoji screens behind, a wooden floor, a hanging scroll (道場, dōjō: "place of the way")
   app.replaceChildren(
-    el("section", { className: "watch dojo" },
-      el("div", { className: "scroll", ariaHidden: "true" }, el("span", {}, "道"), el("span", {}, "場")),
+    el("section", { className: "watch" },
       el("a", { className: "back", href: "#/" }, "← All lessons"),
       el("div", { className: "player frame" }, video),
       el("div", { className: "watch-bar" },
