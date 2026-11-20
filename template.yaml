@@ -10,6 +10,7 @@
 #   Step 7  - MediaConvert: adaptive HLS (360p/720p/1080p), audio for Transcribe, thumbnail
 #   Steps 8-9 - Transcribe (English subtitles + clean transcript) -> Translate (fr, es, it, el)
 #   Steps 10-11 - ClipSensei (Bedrock) drafts learning objectives -> educator review + publish API
+#   Steps 12-13 - learner practice (active recall), ClipSensei marking with evidence checks, spaced repetition
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31   # turns SAM shorthand into full CloudFormation
@@ -36,6 +37,10 @@ Parameters:
     Type: String
     Default: eu.anthropic.claude-haiku-4-5-20251001-v1:0
     Description: Bedrock EU inference profile ClipSensei uses to draft learning objectives
+  MarkingModelId:
+    Type: String
+    Default: eu.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: Bedrock EU inference profile ClipSensei uses to mark learners' answers (fast, low cost)
 
 # -----------------------------------------------------------------------------
 # Conditions: only subscribe an email when one was actually provided
@@ -729,6 +734,95 @@ Resources:
             RestApiId: !Ref StreamDojoApi
             Path: /lessons/{videoId}/publish
             Method: post
+
+  # ===========================================================================
+  # Steps 12-13: learner practice (active recall), ClipSensei marking, spaced repetition
+  # ===========================================================================
+
+  # Read-only learner API: practice prompts and reviews due. Deliberately NO answer-keys access.
+  LearnFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-learn
+      CodeUri: src/learn/
+      Handler: app.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadPublishedLessonsAndDueReviews
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt AppTable.Arn
+                - !Sub ${AppTable.Arn}/index/GSI3
+      Events:
+        Practice:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/lessons/{videoId}/practice
+            Method: get
+        ReviewsDue:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/reviews/due
+            Method: get
+
+  # ClipSensei marking: the only learner-facing function that may read answer keys
+  MarkingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-marking
+      CodeUri: src/marking/
+      Handler: app.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          KEYS_TABLE_NAME: !Ref AnswerKeysTable
+          MODEL_ID: !Ref MarkingModelId
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: SaveAttemptsSchedulesAndStats
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+            - Sid: ReadAnswerKeysOnly       # read, never write
+              Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt AnswerKeysTable.Arn
+            - Sid: InvokeMarkingModel
+              Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${MarkingModelId}
+                - arn:aws:bedrock:*::foundation-model/anthropic.*
+      Events:
+        SubmitAttempt:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/attempts
+            Method: post
+        Hint:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/hint/{videoId}/{objectiveId}
+            Method: get
 
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need

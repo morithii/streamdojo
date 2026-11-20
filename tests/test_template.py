@@ -115,4 +115,13 @@ def test_learner_facing_code_cannot_read_answer_keys():
     resources = load_template()["Resources"]
     readers = [name for name, r in resources.items()
                if r["Type"] == "AWS::Serverless::Function" and "AnswerKeysTable" in str(r["Properties"].get("Policies", ""))]
-    assert sorted(readers) == ["EducatorFunction", "GenerateObjectivesFunction"]
+    assert sorted(readers) == ["EducatorFunction", "GenerateObjectivesFunction", "MarkingFunction"]
+
+
+
+def test_learn_api_has_no_answer_key_access_but_marking_reads_only():
+    resources = load_template()["Resources"]
+    assert "AnswerKeysTable" not in str(resources["LearnFunction"]["Properties"]["Policies"])
+    marking = resources["MarkingFunction"]["Properties"]["Policies"][0]["Statement"]
+    keys = [s for s in marking if s["Sid"] == "ReadAnswerKeysOnly"][0]
+    assert keys["Action"] == "dynamodb:GetItem"
