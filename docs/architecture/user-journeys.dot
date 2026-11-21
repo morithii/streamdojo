@@ -1,0 +1,53 @@
+// Re-generate:  dot -Tpng -Gdpi=150 docs/architecture/user-journeys.dot -o docs/architecture/streamdojo-user-journeys.png
+// StreamDojo user journeys: one swimlane per role, steps left to right, AWS services under each step
+digraph journeys {
+  graph [rankdir=LR, fontname="Helvetica", fontsize=28, labelloc=t, pad=0.5, nodesep=0.35, ranksep=0.45, newrank=true,
+         label="StreamDojo - user journeys\n"];
+  node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=15, margin="0.22,0.14", width=2.3, penwidth=0];
+  edge  [penwidth=2.2, arrowsize=0.9];
+
+  subgraph cluster_creator {
+    label="  CREATOR  -  uploads a lesson"; labeljust=l; fontsize=20; fontname="Helvetica-Bold"; fontcolor="#b35c00";
+    style="rounded,filled"; fillcolor="#fff4ea"; color="#f0c9a0";
+    node [fillcolor="#ffffff", color="#e7871d", penwidth=2];
+    c1 [label=<<b>1. Sign in</b><br/><font point-size="12" color="#666666">Cognito (PKCE)</font>>];
+    c2 [label=<<b>2. Upload video</b><br/>title + file, progress bar<br/><font point-size="12" color="#666666">API Gateway · Lambda · S3 presigned POST</font>>];
+    c3 [label=<<b>3. Watch it process</b><br/>5-step tracker<br/><font point-size="12" color="#666666">EventBridge · Step Functions</font>>];
+    c4 [label=<<b>4. HD video + subtitles</b><br/>360/720/1080p · 5 languages<br/><font point-size="12" color="#666666">MediaConvert · Transcribe · Translate</font>>];
+    c5 [label=<<b>5. Questions drafted</b><br/>objectives, answer keys<br/><font point-size="12" color="#666666">Bedrock (ClipSensei)</font>>];
+    c1 -> c2 -> c3 -> c4 -> c5 [color="#e7871d"];
+  }
+
+  subgraph cluster_educator {
+    label="  EDUCATOR  -  reviews, publishes, improves"; labeljust=l; fontsize=20; fontname="Helvetica-Bold"; fontcolor="#5b3fa8";
+    style="rounded,filled"; fillcolor="#f4f0fc"; color="#cdbff0";
+    node [fillcolor="#ffffff", color="#8a63d2", penwidth=2];
+    e1 [label=<<b>1. Drafts queue</b><br/>lessons waiting for review<br/><font point-size="12" color="#666666">Lambda · DynamoDB (GSI)</font>>];
+    e2 [label=<<b>2. Review &amp; edit</b><br/>title, order, objectives,<br/>key ideas, add / remove<br/><font point-size="12" color="#666666">Lambda · answer-keys table</font>>];
+    e3 [label=<<b>3. Publish</b><br/>to a course (topic)<br/><font point-size="12" color="#666666">DynamoDB: DRAFTS → CATALOGUE</font>>];
+    e4 [label=<<b>4. Insights</b><br/>recall rate, most-missed idea,<br/>who needs help<br/><font point-size="12" color="#666666">Lambda · DynamoDB counters</font>>];
+    e5 [label=<<b>5. ClipSensei's note</b><br/>3 bullets, numbers only<br/><font point-size="12" color="#666666">Bedrock (no names, no answers)</font>>];
+    e1 -> e2 -> e3 -> e4 -> e5 [color="#8a63d2"];
+  }
+
+  subgraph cluster_learner {
+    label="  LEARNER  -  watches, recalls, remembers"; labeljust=l; fontsize=20; fontname="Helvetica-Bold"; fontcolor="#16766d";
+    style="rounded,filled"; fillcolor="#eefaf8"; color="#a8e3dc";
+    node [fillcolor="#ffffff", color="#2ec4b6", penwidth=2];
+    l1 [label=<<b>1. My courses</b><br/>progress per course<br/><font point-size="12" color="#666666">CloudFront · Lambda · DynamoDB</font>>];
+    l2 [label=<<b>2. Watch lesson</b><br/>HD video, subtitles ×5<br/><font point-size="12" color="#666666">CloudFront + OAC · hls.js</font>>];
+    l3 [label=<<b>3. Answer from memory</b><br/>video hidden on purpose<br/><font point-size="12" color="#666666">active recall</font>>];
+    l4 [label=<<b>4. Marked by ClipSensei</b><br/>✓ per key idea, own words<br/>quoted as evidence<br/><font point-size="12" color="#666666">Lambda · Bedrock · evidence check</font>>];
+    l5 [label=<<b>5. Spaced reviews</b><br/>back in 1 → 3 → 7 → 14 → 30 days<br/><font point-size="12" color="#666666">DynamoDB schedule (GSI)</font>>];
+    l1 -> l2 -> l3 -> l4 -> l5 [color="#2ec4b6"];
+    l5 -> l3 [color="#2ec4b6", style=dashed, constraint=false, label="  new question wording  ", fontname="Helvetica", fontsize=12, fontcolor="#16766d"];
+  }
+
+  // Lanes line up step by step
+  {rank=same; c1; e1; l1}  {rank=same; c2; e2; l2}  {rank=same; c3; e3; l3}  {rank=same; c4; e4; l4}  {rank=same; c5; e5; l5}
+
+  // Hand-offs between roles
+  c5 -> e1 [color="#888888", style=dashed, constraint=false, label="  draft ready  ", fontname="Helvetica", fontsize=13, fontcolor="#555555"];
+  e3 -> l1 [color="#888888", style=dashed, constraint=false, label="  published  ", fontname="Helvetica", fontsize=13, fontcolor="#555555"];
+  l4 -> e4 [color="#888888", style=dashed, constraint=false, label="  every attempt updates stats  ", fontname="Helvetica", fontsize=13, fontcolor="#555555"];
+}

@@ -27,6 +27,10 @@ Parameters:
     Default: dev
     AllowedValues: [dev, prod]
     Description: Deployment environment, used in resource names
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 25
+    Description: Monthly AWS budget in USD - emails at 80% actual and 100% forecast (Step 19)
   AlertEmail:
     Type: String
     Default: ""
@@ -80,7 +84,7 @@ Resources:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub streamdojo-${Environment}-alerts
-      KmsMasterKeyId: alias/aws/sns   # encrypt messages at rest with the AWS-managed key
+      KmsMasterKeyId: !Ref AlertsKey   # customer-managed key (Step 19): CloudWatch alarms may use it, the AWS-managed one can't
 
   # Email subscription, created only when AlertEmail is set.
   # AWS sends a confirmation email that you must click before alerts arrive.
@@ -259,6 +263,9 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub streamdojo-${Environment}
+      TimeToLiveSpecification:         # Step 20: bell notifications delete themselves after 30 days
+        AttributeName: expiresAt
+        Enabled: true
       BillingMode: PAY_PER_REQUEST          # on-demand: pay per request, nothing when idle
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true    # restore to any second in the last 35 days
@@ -669,12 +676,17 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable
+          EVENT_BUS_NAME: !Ref EventBus     # Step 20: announces business events
           KEYS_TABLE_NAME: !Ref AnswerKeysTable
           MEDIA_BUCKET: !Ref ProcessedBucket
           MODEL_ID: !Ref GenerationModelId
       Policies:
         - Version: "2012-10-17"
           Statement:
+            - Sid: AnnounceBusinessEvents   # Step 20: only onto StreamDojo's own bus
+              Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt EventBus.Arn
             - Sid: ReadTranscript
               Effect: Allow
               Action: s3:GetObject
@@ -708,11 +720,16 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable
+          EVENT_BUS_NAME: !Ref EventBus     # Step 20: announces business events
           KEYS_TABLE_NAME: !Ref AnswerKeysTable
           ALLOWED_ORIGIN: !Ref FrontendUrl
       Policies:
         - Version: "2012-10-17"
           Statement:
+            - Sid: AnnounceBusinessEvents   # Step 20: only onto StreamDojo's own bus
+              Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt EventBus.Arn
             - Sid: ReviewAndPublishLessons
               Effect: Allow
               Action:
@@ -733,6 +750,12 @@ Resources:
                 - dynamodb:DeleteItem     # Step 16c: ...or removes a draft one
               Resource: !GetAtt AnswerKeysTable.Arn
       Events:
+        RejectLesson:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /lessons/{videoId}/reject
+            Method: post
         ListDrafts:
           Type: Api
           Properties:
@@ -834,18 +857,24 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable
+          EVENT_BUS_NAME: !Ref EventBus     # Step 20: announces business events
           KEYS_TABLE_NAME: !Ref AnswerKeysTable
           MODEL_ID: !Ref MarkingModelId
           ALLOWED_ORIGIN: !Ref FrontendUrl
       Policies:
         - Version: "2012-10-17"
           Statement:
+            - Sid: AnnounceBusinessEvents   # Step 20: only onto StreamDojo's own bus
+              Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt EventBus.Arn
             - Sid: SaveAttemptsSchedulesAndStats
               Effect: Allow
               Action:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
+                - dynamodb:Query          # Step 20: has this learner now practised every idea?
               Resource: !GetAtt AppTable.Arn
             - Sid: ReadAnswerKeysOnly       # read, never write
               Effect: Allow
@@ -1081,6 +1110,708 @@ Resources:
             Path: /catalogue/{videoId}
             Method: get
 
+  # ===========================================================================
+  # Step 20: business events and the in-app notification bell
+  #   publishers (generate objectives, educator, marking) -> EventBridge bus -> notifier -> DynamoDB -> bell
+  # ===========================================================================
+  EventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub streamdojo-${Environment}-events
+
+  # Consumer: decides who hears about each event and writes their bell notifications
+  NotifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-notify
+      CodeUri: src/notify/
+      Handler: app.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          USER_POOL_ID: !Ref UserPool
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: WriteNotificationsOnly
+              Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AppTable.Arn
+              Condition:                  # only USER#... notification items, nothing else in the table
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["USER#*"]
+            - Sid: FindEducators
+              Effect: Allow
+              Action: cognito-idp:ListUsersInGroup
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        BusinessEvents:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBus
+            Pattern:
+              source: [streamdojo]
+              detail-type: [LessonDraftReady, LessonPublished, LessonRejected, PracticeCompleted]
+            RetryPolicy:
+              MaximumRetryAttempts: 3
+              MaximumEventAgeInSeconds: 3600
+            DeadLetterConfig:
+              Type: SQS                   # notifications that still fail land here, never lost silently
+
+  # API: what the bell reads - each user only ever sees their own notifications
+  NotificationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-notifications
+      CodeUri: src/notifications/
+      Handler: app.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          ALLOWED_ORIGIN: !Ref FrontendUrl
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: OwnNotificationsOnly
+              Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["USER#*"]
+      Events:
+        ListNotifications:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /notifications
+            Method: get
+        MarkRead:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /notifications/read
+            Method: post
+
+  # ===========================================================================
+  # Step 19: operations - cost guardrail, alarms and a dashboard
+  # ===========================================================================
+
+  # CloudWatch alarms can't publish to an SNS topic encrypted with the AWS-MANAGED key (alias/aws/sns):
+  # that key's policy can't be changed to let CloudWatch use it, so alarm emails would silently never arrive.
+  # A customer-managed key (about $1/month) whose policy allows CloudWatch fixes that.
+  AlertsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub StreamDojo ${Environment} - encrypts the alerts topic
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdministers
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: CloudWatchAlarmsCanPublish
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  AlertsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/streamdojo-${Environment}-alerts
+      TargetKeyId: !Ref AlertsKey
+
+  # Monthly cost guardrail for the whole account: email at 80% of actual spend
+  # and as soon as AWS forecasts the month will go over the limit. (The first two budgets are free.)
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasAlertEmail
+    Properties:
+      Budget:
+        BudgetName: !Sub streamdojo-${Environment}-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80                   # percent of the budget
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+  # Alarms - each one emails the alerts topic when it fires and again when it recovers
+  PipelineFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub streamdojo-${Environment}-pipeline-failed
+      AlarmDescription: A video processing run failed - check the Step Functions execution graph
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref ProcessVideoStateMachine
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching        # no runs = nothing wrong
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  PipelineDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub streamdojo-${Environment}-upload-events-dead-lettered
+      AlarmDescription: An upload event could not start the pipeline after 3 retries - it is waiting in the dead-letter queue
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ProcessVideoStateMachineVideoUploadedQueue.QueueName   # the queue SAM created for the event rule
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  ApiServerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub streamdojo-${Environment}-api-5xx
+      AlarmDescription: The API returned 5 or more server errors in 5 minutes
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub streamdojo-${Environment}-api
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  # Metric math: one alarm over the four functions learners and educators wait on
+  UserFacingLambdaErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub streamdojo-${Environment}-user-facing-lambda-errors
+      AlarmDescription: Marking, learning, catalogue or educator functions errored 3+ times in 5 minutes
+      Metrics:
+        - Id: total
+          Expression: marking + learn + catalogue + educator
+          Label: Errors in user-facing functions
+          ReturnData: true
+        - Id: marking
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{Name: FunctionName, Value: !Ref MarkingFunction}]}
+            Period: 300
+            Stat: Sum
+        - Id: learn
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{Name: FunctionName, Value: !Ref LearnFunction}]}
+            Period: 300
+            Stat: Sum
+        - Id: catalogue
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{Name: FunctionName, Value: !Ref CatalogueFunction}]}
+            Period: 300
+            Stat: Sum
+        - Id: educator
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{Name: FunctionName, Value: !Ref EducatorFunction}]}
+            Period: 300
+            Stat: Sum
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  # Bedrock refusing calls because we hit the tokens-per-minute quota (the scaling limit to watch)
+  BedrockThrottledAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub streamdojo-${Environment}-bedrock-throttled
+      AlarmDescription: Bedrock throttled ClipSensei - consider a quota increase or queueing marking requests
+      Metrics:
+        # Alarms can't use SEARCH(), but they can use a Metrics Insights query: this one adds up
+        # throttles across every Bedrock model ID, so it works whatever inference profile is in use
+        - Id: throttles
+          Expression: SELECT SUM(InvocationThrottles) FROM SCHEMA("AWS/Bedrock", ModelId)
+          Period: 300
+          Label: Bedrock throttles
+          ReturnData: true
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub streamdojo-${Environment}
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 2,
+              "properties": {
+                "markdown": "# StreamDojo (${Environment})\nUpload pipeline, API, ClipSensei (Bedrock) and video delivery. Alarms email the alerts topic; the monthly budget emails at 80% actual / 100% forecast."
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 2,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Pipeline runs (Step Functions)",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [
+                    "AWS/States",
+                    "ExecutionsStarted",
+                    "StateMachineArn",
+                    "${ProcessVideoStateMachine}",
+                    {
+                      "label": "Started"
+                    }
+                  ],
+                  [
+                    ".",
+                    "ExecutionsSucceeded",
+                    ".",
+                    ".",
+                    {
+                      "label": "Succeeded",
+                      "color": "#2ca02c"
+                    }
+                  ],
+                  [
+                    ".",
+                    "ExecutionsFailed",
+                    ".",
+                    ".",
+                    {
+                      "label": "Failed",
+                      "color": "#d62728"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 2,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Pipeline duration (minutes, p50 / max)",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Average",
+                "period": 300,
+                "metrics": [
+                  [
+                    {
+                      "expression": "m1/60000",
+                      "label": "p50",
+                      "id": "e1"
+                    }
+                  ],
+                  [
+                    {
+                      "expression": "m2/60000",
+                      "label": "max",
+                      "id": "e2"
+                    }
+                  ],
+                  [
+                    "AWS/States",
+                    "ExecutionTime",
+                    "StateMachineArn",
+                    "${ProcessVideoStateMachine}",
+                    {
+                      "id": "m1",
+                      "stat": "p50",
+                      "visible": false
+                    }
+                  ],
+                  [
+                    "...",
+                    {
+                      "id": "m2",
+                      "stat": "Maximum",
+                      "visible": false
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 2,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "ClipSensei (Bedrock) calls and tokens",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  {
+                    "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"Invocations\"', 'Sum', 300)",
+                    "label": "Invocations",
+                    "id": "invocations"
+                  },
+                  {
+                    "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"InputTokenCount\"', 'Sum', 300)",
+                    "label": "Input tokens",
+                    "id": "inputtokens"
+                  },
+                  {
+                    "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"OutputTokenCount\"', 'Sum', 300)",
+                    "label": "Output tokens",
+                    "id": "outputtokens"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 8,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "API requests and errors",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [
+                    "AWS/ApiGateway",
+                    "Count",
+                    "ApiName",
+                    "streamdojo-${Environment}-api",
+                    {
+                      "label": "Requests"
+                    }
+                  ],
+                  [
+                    ".",
+                    "4XXError",
+                    ".",
+                    ".",
+                    {
+                      "label": "4xx (client)",
+                      "color": "#ff7f0e"
+                    }
+                  ],
+                  [
+                    ".",
+                    "5XXError",
+                    ".",
+                    ".",
+                    {
+                      "label": "5xx (server)",
+                      "color": "#d62728"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 8,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "API latency (ms)",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "p50",
+                "period": 300,
+                "metrics": [
+                  [
+                    "AWS/ApiGateway",
+                    "Latency",
+                    "ApiName",
+                    "streamdojo-${Environment}-api",
+                    {
+                      "stat": "p50",
+                      "label": "p50"
+                    }
+                  ],
+                  [
+                    "...",
+                    {
+                      "stat": "p95",
+                      "label": "p95"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 8,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Lambda errors by function",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  {
+                    "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Errors\" streamdojo-${Environment}', 'Sum', 300)",
+                    "label": "Errors",
+                    "id": "errors"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 14,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Lambda duration p95 (ms) - watch for cold starts",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  {
+                    "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Duration\" streamdojo-${Environment}', 'p95', 300)",
+                    "label": "Duration",
+                    "id": "duration"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 14,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Lambda throttles (concurrency limit)",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  {
+                    "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Throttles\" streamdojo-${Environment}', 'Sum', 300)",
+                    "label": "Throttles",
+                    "id": "throttles"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 14,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "DynamoDB reads, writes and throttles",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [
+                    "AWS/DynamoDB",
+                    "ConsumedReadCapacityUnits",
+                    "TableName",
+                    "${AppTable}",
+                    {
+                      "label": "Read units"
+                    }
+                  ],
+                  [
+                    ".",
+                    "ConsumedWriteCapacityUnits",
+                    ".",
+                    ".",
+                    {
+                      "label": "Write units"
+                    }
+                  ],
+                  [
+                    ".",
+                    "ThrottledRequests",
+                    ".",
+                    ".",
+                    {
+                      "label": "Throttled",
+                      "color": "#d62728"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 20,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Video delivery: CloudFront requests",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [
+                    "AWS/CloudFront",
+                    "Requests",
+                    "DistributionId",
+                    "${SiteDistribution}",
+                    "Region",
+                    "Global",
+                    {
+                      "label": "Requests"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 20,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Video delivery: CloudFront error rate (%)",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "stat": "Average",
+                "period": 300,
+                "metrics": [
+                  [
+                    "AWS/CloudFront",
+                    "4xxErrorRate",
+                    "DistributionId",
+                    "${SiteDistribution}",
+                    "Region",
+                    "Global",
+                    {
+                      "label": "4xx %"
+                    }
+                  ],
+                  [
+                    ".",
+                    "5xxErrorRate",
+                    ".",
+                    ".",
+                    ".",
+                    ".",
+                    {
+                      "label": "5xx %",
+                      "color": "#d62728"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "alarm",
+              "x": 0,
+              "y": 26,
+              "width": 24,
+              "height": 3,
+              "properties": {
+                "title": "Alarms",
+                "alarms": [
+                  "${PipelineFailedAlarm.Arn}",
+                  "${PipelineDeadLetterAlarm.Arn}",
+                  "${ApiServerErrorsAlarm.Arn}",
+                  "${UserFacingLambdaErrorsAlarm.Arn}",
+                  "${BedrockThrottledAlarm.Arn}"
+                ]
+              }
+            }
+          ]
+        }
+
 # -----------------------------------------------------------------------------
 # Outputs: values other steps and the README will need
 # -----------------------------------------------------------------------------
@@ -1128,3 +1859,6 @@ Outputs:
   CognitoDomain:
     Description: Cognito hosted sign-in domain the website redirects to
     Value: !Sub ${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
+  DashboardUrl:
+    Description: CloudWatch operations dashboard
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=streamdojo-${Environment}

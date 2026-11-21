@@ -181,3 +181,24 @@ def test_progress_counts_practised_ideas_per_lesson():
                          "requestContext": {"authorizer": {"claims": {"sub": "u1", "cognito:groups": "learners"}}}}, None)
     assert json.loads(res["body"]) == {"practised": {"v1": 2, "v2": 1}} and pages.calls == 2
 
+
+class FakeEvents:
+    def __init__(self):
+        self.sent = []
+
+    def put_events(self, Entries):
+        self.sent.extend(Entries)
+        return {"FailedEntryCount": 0}
+
+
+def test_practising_the_last_idea_announces_the_lesson_completed():
+    m = setup_marking(FULL)
+    m._clients["table:app"].items[("VIDEO#v1", "META")]["objectiveCount"] = 1
+    m.EVENT_BUS_NAME, m._clients["events"] = "bus", FakeEvents()
+    m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER}), None)
+    (sent,) = m._clients["events"].sent
+    detail = json.loads(sent["Detail"])
+    assert sent["DetailType"] == "PracticeCompleted" and detail["learnerName"] == "Sam"
+    assert (detail["recalled"], detail["total"]) == (1, 1)
+    m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER, "retry": True}), None)
+    assert len(m._clients["events"].sent) == 1                                          # retries never re-announce

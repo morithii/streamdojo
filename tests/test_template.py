@@ -158,3 +158,48 @@ def test_browser_uploads_allowed_only_from_our_site():
     assert cors["AllowedMethods"] == ["POST"] and len(cors["AllowedOrigins"]) == 2
     assert "SiteDistribution.DomainName" in str(cors["AllowedOrigins"][1])
     assert "*" not in str(cors["AllowedOrigins"])                     # never "any website"
+
+def test_every_alarm_emails_the_alerts_topic():
+    resources = load_template()["Resources"]
+    alarms = {name: r for name, r in resources.items() if r["Type"] == "AWS::CloudWatch::Alarm"}
+    assert len(alarms) >= 5
+    for name, alarm in alarms.items():
+        assert "AlertsTopic" in str(alarm["Properties"]["AlarmActions"]), name
+        assert "SEARCH(" not in str(alarm["Properties"]), name          # alarms can't use SEARCH() - deploy would fail
+
+
+def test_alerts_topic_uses_a_key_cloudwatch_can_use():
+    resources = load_template()["Resources"]
+    assert "alias/aws/sns" not in str(resources["AlertsTopic"]["Properties"])       # AWS-managed key blocks CloudWatch
+    statements = resources["AlertsKey"]["Properties"]["KeyPolicy"]["Statement"]
+    assert any(s.get("Principal", {}).get("Service") == "cloudwatch.amazonaws.com" for s in statements)
+    assert resources["AlertsKey"]["Properties"]["EnableKeyRotation"] is True
+
+
+def test_budget_warns_before_the_limit():
+    budget = load_template()["Resources"]["MonthlyBudget"]["Properties"]
+    notes = {(n["Notification"]["NotificationType"], n["Notification"]["Threshold"]) for n in budget["NotificationsWithSubscribers"]}
+    assert notes == {("ACTUAL", 80), ("FORECASTED", 100)}
+
+
+def test_dashboard_body_is_valid_json():
+    import json
+    import re
+    body = load_template()["Resources"]["OperationsDashboard"]["Properties"]["DashboardBody"]["Fn::Sub"]
+    assert len(json.loads(re.sub(r"\$\{[^}]+\}", "X", body))["widgets"]) >= 10
+
+
+def test_only_the_three_publishers_can_announce_events_and_only_on_our_bus():
+    resources = load_template()["Resources"]
+    publishers = sorted(n for n, r in resources.items() if "events:PutEvents" in str(r.get("Properties", {}).get("Policies", "")))
+    assert publishers == ["EducatorFunction", "GenerateObjectivesFunction", "MarkingFunction"]
+    for name in publishers:
+        statement = [s for s in resources[name]["Properties"]["Policies"][0]["Statement"] if s["Sid"] == "AnnounceBusinessEvents"][0]
+        assert "EventBus" in str(statement["Resource"])                      # never "*"
+
+
+def test_notifier_can_only_write_user_notification_items():
+    statements = load_template()["Resources"]["NotifyFunction"]["Properties"]["Policies"][0]["Statement"]
+    write = [s for s in statements if s["Sid"] == "WriteNotificationsOnly"][0]
+    assert write["Action"] == "dynamodb:PutItem"
+    assert write["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"] == ["USER#*"]

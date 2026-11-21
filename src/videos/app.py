@@ -132,7 +132,8 @@ def list_videos(user_id):
         ScanIndexForward=False,                            # newest first
         Limit=50,
     )
-    fields = ["videoId", "title", "createdAt", "processingStartedAt", "processingStatus", "captionStatus", "objectivesStatus"]
+    fields = ["videoId", "title", "createdAt", "processingStartedAt", "processingStatus", "captionStatus", "objectivesStatus",
+              "rejectionReason"]
     videos = []
     for item in result.get("Items", []):
         video = {f: item.get(f) for f in fields}

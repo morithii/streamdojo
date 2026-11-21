@@ -25,7 +25,7 @@ function steps(v) {
   const uploaded = v.processingStatus !== "UPLOADING";
   const transcoded = v.processingStatus === "READY";
   const captionsDone = ["READY", "PARTIAL"].includes(v.captionStatus);
-  const questionsDone = ["DRAFT_READY", "PUBLISHED"].includes(v.objectivesStatus);
+  const questionsDone = ["DRAFT_READY", "PUBLISHED", "REJECTED"].includes(v.objectivesStatus);
   const languages = (v.subtitleLanguages || []).length;
   const list = [
     { label: "Upload", state: uploaded ? "done" : "active", detail: uploaded ? "Received" : "Waiting for the file" },
@@ -35,8 +35,10 @@ function steps(v) {
       detail: transcoded || captionsDone ? `${languages} of ${LANGUAGES} languages${v.captionStatus === "PARTIAL" ? " (some failed)" : ""}` : "" },
     { label: "Questions", state: v.objectivesStatus === "FAILED" ? "failed" : questionsDone ? "done" : captionsDone ? "active" : "todo",
       detail: questionsDone ? `${v.objectiveCount} drafted by ClipSensei` : captionsDone ? "ClipSensei is drafting…" : "" },
-    { label: "Published", state: v.objectivesStatus === "PUBLISHED" ? "done" : questionsDone ? "waiting" : "todo",
-      detail: v.objectivesStatus === "PUBLISHED" ? "Live for learners" : questionsDone ? "Waiting for an educator" : "" },
+    v.objectivesStatus === "REJECTED"
+      ? { label: "Not approved", state: "failed", detail: v.rejectionReason || "Sent back by an educator" }
+      : { label: "Published", state: v.objectivesStatus === "PUBLISHED" ? "done" : questionsDone ? "waiting" : "todo",
+          detail: v.objectivesStatus === "PUBLISHED" ? "Live for learners" : questionsDone ? "Waiting for an educator" : "" },
   ];
   // Anything still "active" an hour after upload has stalled - say so instead of spinning forever
   const minutes = (Date.now() - Date.parse(v.createdAt)) / 60000;

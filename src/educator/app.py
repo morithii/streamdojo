@@ -6,6 +6,7 @@ PUT  /lessons/{videoId}     {"title": ..., "position": n}   rename the lesson an
 PUT  /lessons/{videoId}/objectives/{objectiveId}      save the educator's edits
 POST /lessons/{videoId}/objectives                    add an objective ClipSensei didn't pick (max 5)
 DELETE /lessons/{videoId}/objectives/{objectiveId}    remove a weak draft objective (drafts only, keep at least 1)
+POST /lessons/{videoId}/reject      {"reason": ...}   send a draft back to its creator (reason required)
 POST /lessons/{videoId}/publish   {"topic": "..."}    publish: DRAFTS queue -> CATALOGUE
 
 Educators only. Nothing is shown to learners until an educator publishes it.
@@ -17,6 +18,7 @@ from datetime import datetime, timezone
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 KEYS_TABLE_NAME = os.environ.get("KEYS_TABLE_NAME", "")
@@ -31,6 +33,37 @@ def table(name):
     if name not in _tables:
         _tables[name] = boto3.resource("dynamodb").Table(name)
     return _tables[name]
+
+
+_clients = {}
+
+
+def client(name):
+    if name not in _clients:
+        _clients[name] = boto3.client(name)
+    return _clients[name]
+
+# --- Step 20: business events -------------------------------------------------------------
+EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "")
+
+
+def announce(detail_type, detail):
+    """Tell the rest of StreamDojo what just happened, via EventBridge. Whoever cares (today: the
+    notifier that fills the bell) subscribes with a rule. Never breaks the main action: if the event
+    can't be sent, the lesson is still published / the answer is still marked, and we log it."""
+    if not EVENT_BUS_NAME:
+        return
+    try:
+        result = client("events").put_events(Entries=[{
+            "EventBusName": EVENT_BUS_NAME, "Source": "streamdojo", "DetailType": detail_type,
+            "Detail": json.dumps(detail, default=str)}])
+        if result.get("FailedEntryCount"):
+            print(json.dumps({"level": "WARNING", "message": "event not accepted", "detailType": detail_type,
+                              "entries": result.get("Entries")}))
+    except Exception as error:                        # noqa: BLE001 - notifications are best-effort
+        print(json.dumps({"level": "WARNING", "message": "could not announce event", "detailType": detail_type,
+                          "error": str(error)}))
+
 
 
 def response(status, body):
@@ -226,7 +259,34 @@ def publish(video_id, body, user_id):
         ConditionExpression="objectivesStatus = :draft",
         ExpressionAttributeValues={":pub": "PUBLISHED", ":t": topic_id, ":tn": topic, ":u": user_id, ":at": published_at,
                                    ":cat": "CATALOGUE", ":sk": f"{published_at}#{video_id}", ":draft": "DRAFT_READY"})
+    announce("LessonPublished", {"videoId": video_id, "title": lesson.get("title"), "topicName": topic,
+                                 "creatorSub": lesson.get("creatorSub"), "educatorSub": user_id})
     return response(200, {"message": "Published", "videoId": video_id, "topicId": topic_id})
+
+
+def reject(video_id, body, user_id):
+    """Business rule: only a draft can be rejected, and the creator must be told why."""
+    reason = str(body.get("reason", "")).strip()
+    if not 5 <= len(reason) <= 500:
+        return response(400, {"message": "Give the creator a reason (5-500 characters)"})
+    lesson_key = {"PK": f"VIDEO#{video_id}", "SK": "META"}
+    lesson = table(TABLE_NAME).get_item(Key=lesson_key).get("Item")
+    if not lesson:
+        return response(404, {"message": "Lesson not found"})
+    try:
+        # Leaves the DRAFTS queue (REMOVE the sparse GSI1 keys) - only if it is still a draft
+        table(TABLE_NAME).update_item(
+            Key=lesson_key,
+            UpdateExpression="SET objectivesStatus = :rej, rejectionReason = :r, rejectedBy = :u, rejectedAt = :at REMOVE GSI1PK, GSI1SK",
+            ConditionExpression="objectivesStatus = :draft",
+            ExpressionAttributeValues={":rej": "REJECTED", ":r": reason, ":u": user_id, ":at": now(), ":draft": "DRAFT_READY"})
+    except ClientError as error:
+        if error.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        return response(409, {"message": "Only a draft waiting for review can be rejected"})
+    announce("LessonRejected", {"videoId": video_id, "title": lesson.get("title"), "reason": reason,
+                                "creatorSub": lesson.get("creatorSub"), "educatorSub": user_id})
+    return response(200, {"message": "Rejected", "videoId": video_id})
 
 
 def handler(event, context):
@@ -251,6 +311,8 @@ def handler(event, context):
         return add_objective(params["videoId"], body, user_id)
     if route == "DELETE /lessons/{videoId}/objectives/{objectiveId}":
         return delete_objective(params["videoId"], params["objectiveId"])
+    if route == "POST /lessons/{videoId}/reject":
+        return reject(params["videoId"], body, user_id)
     if route == "POST /lessons/{videoId}/publish":
         return publish(params["videoId"], body, user_id)
     return response(404, {"message": "Unknown route"})

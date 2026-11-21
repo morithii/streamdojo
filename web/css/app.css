@@ -290,3 +290,33 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 @media (max-width: 1000px) { .lesson-page { grid-template-columns: 1fr; } .lesson-aside { position: static; } }
 
 .courses > h2 { margin: 2rem 0 0.4rem; }
+
+/* Notification bell */
+.bell { position: relative; }
+.bell-button { position: relative; padding: 0.5rem 0.8rem; font-size: 1.05rem; }
+.bell .badge {
+  position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px;
+  background: var(--miss); color: var(--bg); font-size: 0.72rem; font-weight: 800; display: grid; place-items: center;
+}
+.bell .badge[hidden] { display: none; }
+.bell-panel {
+  position: absolute; right: 0; top: calc(100% + 10px); width: min(380px, 90vw); max-height: 70vh; overflow: auto; z-index: 20;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  padding: 0.8rem;
+}
+.bell-panel h2 { font-size: 1rem; margin: 0.2rem 0.4rem 0.6rem; }
+.bell-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.bell-list a { display: grid; gap: 0.2rem; padding: 0.6rem 0.7rem; border-radius: 8px; color: var(--text); text-decoration: none; }
+.bell-list a:hover { background: var(--bg); }
+.bell-list a.unread { background: rgba(46, 196, 182, 0.1); border-left: 3px solid var(--accent); font-weight: 600; }
+.bell-list small { color: var(--muted); font-weight: 400; }
+.bell-list .empty { color: var(--muted); padding: 0.6rem; }
+
+/* Educator decision: publish or send back */
+.decision { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: 2rem; }
+.decision .publish { margin-top: 0; }
+.publish.reject { border-color: var(--miss); }
+.publish.reject textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0.55rem 0.7rem; width: 100%; }
+.btn.danger { border-color: var(--miss); color: var(--miss); }
+.bell-icon { display: grid; place-items: center; }
+.step { align-content: start; }                 /* labels line up even when one step has a long reason */

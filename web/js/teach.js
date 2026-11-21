@@ -167,6 +167,31 @@ export async function renderReview(app, videoId) {
 
   const topic = el("input", { placeholder: "Topic row on the home page, e.g. Cloud Career Skills" });
   const publishStatus = el("p", { className: "status", role: "status" });
+  // Reject: the creator is told why (the reason is required) and uploads a fixed video
+  const reason = el("textarea", { rows: 3, maxLength: 500, placeholder: "e.g. The audio is too quiet after 02:10 - please re-record that part." });
+  const rejectStatus = el("p", { className: "status", role: "status" });
+  const rejectPanel = isDraft
+    ? el("section", { className: "publish reject" },
+        el("h2", {}, "Or send it back"),
+        el("p", { className: "meta" }, "The creator gets a notification with your reason and can upload a fixed version."),
+        el("label", { className: "field" }, el("span", {}, "Reason for the creator"), reason),
+        el("button", {
+          className: "btn ghost danger",
+          onclick: async () => {
+            if (reason.value.trim().length < 5) return void (rejectStatus.textContent = "Tell the creator why (at least 5 characters).");
+            rejectStatus.textContent = "Sending back…";
+            try {
+              await api(`/lessons/${enc(videoId)}/reject`, { method: "POST", body: { reason: reason.value } });
+              location.hash = "#/teach";
+            } catch (error) {
+              rejectStatus.textContent = error.message;
+            }
+          },
+        }, "Reject and notify the creator"),
+        rejectStatus,
+      )
+    : null;
+
   const publishPanel = isDraft
     ? el("section", { className: "publish" },
         el("h2", {}, "Publish"),
@@ -227,7 +252,7 @@ export async function renderReview(app, videoId) {
         : "These are live. Edits apply to the next attempt; learners' schedules are kept."),
       list,
       addButton,
-      publishPanel,
+      el("div", { className: "decision" }, publishPanel, rejectPanel),
     ),
   );
 }

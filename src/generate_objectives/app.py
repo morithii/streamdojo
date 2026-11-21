@@ -79,6 +79,28 @@ def table(name):
         _clients[key] = boto3.resource("dynamodb").Table(name)
     return _clients[key]
 
+# --- Step 20: business events -------------------------------------------------------------
+EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "")
+
+
+def announce(detail_type, detail):
+    """Tell the rest of StreamDojo what just happened, via EventBridge. Whoever cares (today: the
+    notifier that fills the bell) subscribes with a rule. Never breaks the main action: if the event
+    can't be sent, the lesson is still published / the answer is still marked, and we log it."""
+    if not EVENT_BUS_NAME:
+        return
+    try:
+        result = client("events").put_events(Entries=[{
+            "EventBusName": EVENT_BUS_NAME, "Source": "streamdojo", "DetailType": detail_type,
+            "Detail": json.dumps(detail, default=str)}])
+        if result.get("FailedEntryCount"):
+            print(json.dumps({"level": "WARNING", "message": "event not accepted", "detailType": detail_type,
+                              "entries": result.get("Entries")}))
+    except Exception as error:                        # noqa: BLE001 - notifications are best-effort
+        print(json.dumps({"level": "WARNING", "message": "could not announce event", "detailType": detail_type,
+                          "error": str(error)}))
+
+
 
 def transcript_text(clean):
     """'[01:16] Today we learn OAC.' lines, so the model can copy real timestamps."""
@@ -182,4 +204,5 @@ def handler(event, context):
             ":st": str(data.get("suggestedTitle") or "").strip()[:120],   # the educator decides whether to use it
         },
     )
+    announce("LessonDraftReady", {"videoId": video_id, "title": lesson.get("title"), "objectiveCount": len(data["objectives"])})
     return {"videoId": video_id, "objectives": len(data["objectives"]), "inputTokens": tokens_in, "outputTokens": tokens_out}

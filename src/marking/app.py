@@ -23,6 +23,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import boto3
+from boto3.dynamodb.conditions import Key
 
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 KEYS_TABLE_NAME = os.environ.get("KEYS_TABLE_NAME", "")
@@ -81,6 +82,28 @@ def table(name):
     if key not in _clients:
         _clients[key] = boto3.resource("dynamodb").Table(name)
     return _clients[key]
+
+# --- Step 20: business events -------------------------------------------------------------
+EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "")
+
+
+def announce(detail_type, detail):
+    """Tell the rest of StreamDojo what just happened, via EventBridge. Whoever cares (today: the
+    notifier that fills the bell) subscribes with a rule. Never breaks the main action: if the event
+    can't be sent, the lesson is still published / the answer is still marked, and we log it."""
+    if not EVENT_BUS_NAME:
+        return
+    try:
+        result = client("events").put_events(Entries=[{
+            "EventBusName": EVENT_BUS_NAME, "Source": "streamdojo", "DetailType": detail_type,
+            "Detail": json.dumps(detail, default=str)}])
+        if result.get("FailedEntryCount"):
+            print(json.dumps({"level": "WARNING", "message": "event not accepted", "detailType": detail_type,
+                              "entries": result.get("Entries")}))
+    except Exception as error:                        # noqa: BLE001 - notifications are best-effort
+        print(json.dumps({"level": "WARNING", "message": "could not announce event", "detailType": detail_type,
+                          "error": str(error)}))
+
 
 
 def response(status, body):
@@ -166,6 +189,19 @@ def hint(video_id, objective_id):
     return response(200, {"hint": loaded[2]["hint"]})
 
 
+def announce_if_lesson_completed(user_id, display_name, lesson, video_id):
+    """A learner has 'completed' a lesson when they've practised every one of its ideas at least once.
+    Their schedule items (one per idea practised) tell us that - and how many they recalled unaided."""
+    schedules = table(TABLE_NAME).query(
+        KeyConditionExpression=Key("PK").eq(f"VIDEO#{video_id}") & Key("SK").begins_with(f"LEARNER#{user_id}#OBJ#"))["Items"]
+    schedules = [s for s in schedules if s["SK"].startswith(f"LEARNER#{user_id}#OBJ#")]
+    total = int(lesson.get("objectiveCount") or 0)
+    if total and len(schedules) == total:                    # this attempt was the last idea still untried
+        announce("PracticeCompleted", {
+            "videoId": video_id, "title": lesson.get("title"), "learnerSub": user_id, "learnerName": display_name,
+            "recalled": sum(1 for s in schedules if s.get("lastResult") == "UNAIDED_FULL"), "total": total})
+
+
 def submit_attempt(user_id, display_name, body):
     video_id, objective_id = str(body.get("videoId", "")), str(body.get("objectiveId", ""))
     answer = str(body.get("answer", ""))[:MAX_ANSWER_CHARS]
@@ -210,11 +246,12 @@ def submit_attempt(user_id, display_name, body):
         attempt.update({"GSI2PK": "REVIEWQUEUE", "GSI2SK": iso(now)})
     table(TABLE_NAME).put_item(Item=attempt)
 
-    next_review, counted = None, False
+    next_review, counted, first_time = None, False, False
     if not is_retry:                                         # a retry never touches the schedule
         schedule_key = {"PK": f"VIDEO#{video_id}", "SK": f"LEARNER#{user_id}#OBJ#{objective_id}"}
         current = table(TABLE_NAME).get_item(Key=schedule_key).get("Item", {})
         previous = int(current["intervalDays"]) if "intervalDays" in current else None
+        first_time = previous is None                        # this learner's very first try at this idea
         success = recalled_all and unaided
         # Counted = first practice of this idea, or a review that is now due (ISO strings sort by time)
         counted = "nextReviewAt" not in current or current["nextReviewAt"] <= iso(now)
@@ -240,6 +277,9 @@ def submit_attempt(user_id, display_name, body):
             values[f":m{i}"] = 1
         table(TABLE_NAME).update_item(Key={"PK": f"VIDEO#{video_id}", "SK": f"STATS#{objective_id}"},
                                       UpdateExpression=expression, ExpressionAttributeValues=values)
+
+    if kind == "PRACTICE" and first_time:
+        announce_if_lesson_completed(user_id, display_name, lesson, video_id)
 
     return response(200, {
         "pointResults": results, "recalledAll": recalled_all, "feedback": feedback,

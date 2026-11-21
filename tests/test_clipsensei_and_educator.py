@@ -36,7 +36,10 @@ class FakeTable:
             attr, value = kwargs["UpdateExpression"][4:].split()
             item[attr] = item.get(attr, 0) + ExpressionAttributeValues[value]
             return
-        for part in kwargs["UpdateExpression"].replace("SET ", "").split(","):
+        expression, _, removed = kwargs["UpdateExpression"].partition(" REMOVE ")   # e.g. "SET a = :a REMOVE b, c"
+        for attr in filter(None, (r.strip() for r in removed.split(","))):
+            item.pop(attr, None)
+        for part in expression.replace("SET ", "").split(","):
             attr, value = [s.strip() for s in part.split("=")]
             item[names.get(attr, attr)] = ExpressionAttributeValues[value]
 
@@ -249,3 +252,25 @@ def test_educator_sets_a_lessons_place_in_the_course():
         res = edu.handler(educator_event("educators", "PUT", route, {"videoId": "v1"}, {"position": bad}), None)
         assert res["statusCode"] == 400
 
+
+class FakeEvents:
+    def __init__(self):
+        self.sent = []
+
+    def put_events(self, Entries):
+        self.sent.extend(Entries)
+        return {"FailedEntryCount": 0}
+
+
+def test_reject_needs_a_reason_leaves_the_queue_and_tells_the_creator():
+    edu, app, _ = setup_educator()
+    app.items[("VIDEO#v1", "META")].update({"creatorSub": "c1", "GSI1PK": "DRAFTS", "GSI1SK": "x"})
+    edu.EVENT_BUS_NAME, edu._clients = "bus", {"events": FakeEvents()}
+    route = "/lessons/{videoId}/reject"
+    assert edu.handler(educator_event("educators", "POST", route, {"videoId": "v1"}, {"reason": "no"}), None)["statusCode"] == 400
+    ok = edu.handler(educator_event("educators", "POST", route, {"videoId": "v1"}, {"reason": "Audio is too quiet"}), None)
+    assert ok["statusCode"] == 200
+    lesson = app.items[("VIDEO#v1", "META")]
+    assert lesson["objectivesStatus"] == "REJECTED" and "GSI1PK" not in lesson          # out of the drafts queue
+    (sent,) = edu._clients["events"].sent
+    assert sent["DetailType"] == "LessonRejected" and json.loads(sent["Detail"])["creatorSub"] == "c1"
