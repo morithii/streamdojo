@@ -186,8 +186,14 @@ def test_dashboard_body_is_valid_json():
     import json
     import re
     body = load_template()["Resources"]["OperationsDashboard"]["Properties"]["DashboardBody"]["Fn::Sub"]
-    assert len(json.loads(re.sub(r"\$\{[^}]+\}", "X", body))["widgets"]) >= 10
-
+    widgets = json.loads(re.sub(r"\$\{[^}]+\}", "X", body))["widgets"]
+    assert len(widgets) >= 10
+    # CloudWatch's own rule (a deploy failed on it once): every metrics entry is a LIST - strings,
+    # with at most one options object, and that object only as the last element
+    for widget in widgets:
+        for entry in widget.get("properties", {}).get("metrics", []):
+            assert isinstance(entry, list), (widget["properties"]["title"], entry)
+            assert all(isinstance(x, str) for x in entry[:-1]) and isinstance(entry[-1], (str, dict))
 
 def test_only_the_three_publishers_can_announce_events_and_only_on_our_bus():
     resources = load_template()["Resources"]

@@ -1515,21 +1515,27 @@ Resources:
                 "stat": "Sum",
                 "period": 300,
                 "metrics": [
-                  {
-                    "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"Invocations\"', 'Sum', 300)",
-                    "label": "Invocations",
-                    "id": "invocations"
-                  },
-                  {
-                    "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"InputTokenCount\"', 'Sum', 300)",
-                    "label": "Input tokens",
-                    "id": "inputtokens"
-                  },
-                  {
-                    "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"OutputTokenCount\"', 'Sum', 300)",
-                    "label": "Output tokens",
-                    "id": "outputtokens"
-                  }
+                  [
+                    {
+                      "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"Invocations\"', 'Sum', 300)",
+                      "label": "Invocations",
+                      "id": "invocations"
+                    }
+                  ],
+                  [
+                    {
+                      "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"InputTokenCount\"', 'Sum', 300)",
+                      "label": "Input tokens",
+                      "id": "inputtokens"
+                    }
+                  ],
+                  [
+                    {
+                      "expression": "SEARCH('{AWS/Bedrock,ModelId} MetricName=\"OutputTokenCount\"', 'Sum', 300)",
+                      "label": "Output tokens",
+                      "id": "outputtokens"
+                    }
+                  ]
                 ]
               }
             },
@@ -1627,11 +1633,13 @@ Resources:
                 "stat": "Sum",
                 "period": 300,
                 "metrics": [
-                  {
-                    "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Errors\" streamdojo-${Environment}', 'Sum', 300)",
-                    "label": "Errors",
-                    "id": "errors"
-                  }
+                  [
+                    {
+                      "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Errors\" streamdojo-${Environment}', 'Sum', 300)",
+                      "label": "Errors",
+                      "id": "errors"
+                    }
+                  ]
                 ]
               }
             },
@@ -1649,11 +1657,13 @@ Resources:
                 "stat": "Sum",
                 "period": 300,
                 "metrics": [
-                  {
-                    "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Duration\" streamdojo-${Environment}', 'p95', 300)",
-                    "label": "Duration",
-                    "id": "duration"
-                  }
+                  [
+                    {
+                      "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Duration\" streamdojo-${Environment}', 'p95', 300)",
+                      "label": "Duration",
+                      "id": "duration"
+                    }
+                  ]
                 ]
               }
             },
@@ -1671,11 +1681,13 @@ Resources:
                 "stat": "Sum",
                 "period": 300,
                 "metrics": [
-                  {
-                    "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Throttles\" streamdojo-${Environment}', 'Sum', 300)",
-                    "label": "Throttles",
-                    "id": "throttles"
-                  }
+                  [
+                    {
+                      "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Throttles\" streamdojo-${Environment}', 'Sum', 300)",
+                      "label": "Throttles",
+                      "id": "throttles"
+                    }
+                  ]
                 ]
               }
             },
