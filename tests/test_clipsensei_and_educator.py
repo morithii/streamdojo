@@ -154,6 +154,17 @@ def test_educator_sees_prompts_and_answer_key_together():
     assert obj["prompts"] == ["a?", "b?", "c?"] and obj["modelAnswer"] == "m"
 
 
+def test_educator_can_watch_the_draft_before_deciding():
+    edu, app, _ = setup_educator()
+    app.items[("VIDEO#v1", "META")].update({"hlsPath": "processed/v1/hls/main.m3u8",
+                                             "thumbnailPath": "processed/v1/thumb/t.jpg", "subtitleLanguages": {"fr", "en"}})
+    res = edu.handler(educator_event("educators", "GET", "/lessons/{videoId}/objectives", {"videoId": "v1"}), None)
+    body = json.loads(res["body"])
+    assert body["hlsUrl"] == "/media/processed/v1/hls/main.m3u8"
+    assert [s["lang"] for s in body["subtitles"]] == ["en", "fr"]          # English first
+    assert body["subtitles"][1]["url"] == "/media/processed/v1/transcript/subtitles.fr.vtt"
+
+
 def test_publish_moves_lesson_from_drafts_to_catalogue():
     edu, app, keys = setup_educator()
     res = edu.handler(educator_event("[creators, educators]", "POST", "/lessons/{videoId}/publish",
@@ -274,3 +285,4 @@ def test_reject_needs_a_reason_leaves_the_queue_and_tells_the_creator():
     assert lesson["objectivesStatus"] == "REJECTED" and "GSI1PK" not in lesson          # out of the drafts queue
     (sent,) = edu._clients["events"].sent
     assert sent["DetailType"] == "LessonRejected" and json.loads(sent["Detail"])["creatorSub"] == "c1"
+

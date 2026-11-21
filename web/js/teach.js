@@ -2,13 +2,14 @@
 // Educator dashboard (educators group only - the API enforces this, the UI just hides the link).
 //
 //   #/teach                    drafts waiting for review + published lessons
-//   #/teach/review/<id>        edit ClipSensei's objectives, add or remove one, publish
+//   #/teach/review/<id>        WATCH the lesson, edit ClipSensei's objectives, publish or reject
 //   #/teach/insights/<id>      what's sticking, what isn't, who needs help (+ ClipSensei's note)
 //
 // The educator sees the answer keys here; learners never can (separate table, separate IAM).
 // =============================================================================
 import { el, sensei } from "./dom.js";
 import { api } from "./api.js";
+import { lessonPlayer } from "./player.js";
 
 const MAX_OBJECTIVES = 5;
 const enc = encodeURIComponent;
@@ -69,7 +70,7 @@ function field(label, control, help) {
   return el("label", { className: "field" }, el("span", {}, label), control, help ? el("small", {}, help) : null);
 }
 
-function objectiveForm(lesson, objective, onDone) {
+function objectiveForm(lesson, objective, onDone, seek) {
   const isNew = !objective.objectiveId;
   const status = el("p", { className: "status", role: "status" });
   const inputs = {
@@ -129,7 +130,10 @@ function objectiveForm(lesson, objective, onDone) {
       isNew ? el("span", { className: "tag" }, "written by you") : el("span", { className: "tag" }, objective.status === "PUBLISHED" ? "live" : "draft"),
     ),
     field("Objective", inputs.objective, "What the learner should be able to do, starting with a verb."),
-    field("Taught at", inputs.timestamp, "Where in the video - used for the \"Rewatch from\" button."),
+    field("Taught at",
+      el("div", { className: "row-input" }, inputs.timestamp,
+        seek ? el("button", { type: "button", className: "btn ghost small", onclick: () => seek(inputs.timestamp.value) }, "▶ Play from here") : null),
+      "Where in the video - check it really is taught there. Learners get a \"Rewatch from\" button."),
     el("fieldset", { className: "field" },
       el("legend", {}, "Key ideas a good answer must contain (2–4, each a different idea)"),
       pointList,
@@ -156,13 +160,30 @@ function objectiveForm(lesson, objective, onDone) {
 export async function renderReview(app, videoId) {
   const lesson = await api(`/lessons/${enc(videoId)}/objectives`);
   const reload = () => renderReview(app, videoId);
-  const list = el("div", { className: "stack" }, ...lesson.objectives.map((o) => objectiveForm(lesson, o, reload)));
+
+  // Watch before you approve: the same stream and subtitles the learner will get
+  const player = lesson.hlsUrl ? lessonPlayer(lesson) : null;
+  const seek = player ? (mmss) => {
+    const match = /^(\d{1,3}):(\d{2})$/.exec((mmss || "").trim());
+    if (!match) return;
+    player.video.currentTime = Number(match[1]) * 60 + Number(match[2]);
+    player.video.play().catch(() => {});        // browsers may block autoplay - the position is still set
+    player.video.scrollIntoView({ behavior: "smooth", block: "center" });
+  } : null;
+  const watch = player
+    ? el("section", { className: "review-watch" },
+        el("div", { className: "player frame" }, player.video),
+        el("div", { className: "watch-actions" }, el("label", {}, "Subtitles ", player.picker),
+          el("span", { className: "meta" }, "Watch it through, then check each objective below against what is actually taught.")))
+    : el("p", { className: "meta" }, "The video is still processing - refresh in a minute to watch it.");
+
+  const list = el("div", { className: "stack" }, ...lesson.objectives.map((o) => objectiveForm(lesson, o, reload, seek)));
   const isDraft = lesson.objectivesStatus === "DRAFT_READY";
 
   const addButton = el("button", {
     className: "btn ghost",
     disabled: lesson.objectives.length >= MAX_OBJECTIVES,
-    onclick: () => { addButton.remove(); list.append(objectiveForm(lesson, {}, reload)); },
+    onclick: () => { addButton.remove(); list.append(objectiveForm(lesson, {}, reload, seek)); },
   }, lesson.objectives.length >= MAX_OBJECTIVES ? `Maximum ${MAX_OBJECTIVES} objectives` : "+ Add an objective ClipSensei missed");
 
   const topic = el("input", { placeholder: "Topic row on the home page, e.g. Cloud Career Skills" });
@@ -247,6 +268,7 @@ export async function renderReview(app, videoId) {
         el("small", {}, "Leave blank to keep the order lessons were published in. Lower numbers come first.")),
       titleStatus,
       suggestion,
+      watch,
       sensei(isDraft
         ? "I drafted these from the transcript. Check each key idea is a different idea - that's what makes the marking fair."
         : "These are live. Edits apply to the next attempt; learners' schedules are kept."),
@@ -255,6 +277,7 @@ export async function renderReview(app, videoId) {
       el("div", { className: "decision" }, publishPanel, rejectPanel),
     ),
   );
+  if (player) player.start();                   // attach the stream once the <video> is on the page
 }
 
 // ---------------------------------------------------------------------------

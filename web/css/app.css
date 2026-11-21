@@ -320,3 +320,7 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .btn.danger { border-color: var(--miss); color: var(--miss); }
 .bell-icon { display: grid; place-items: center; }
 .step { align-content: start; }                 /* labels line up even when one step has a long reason */
+
+/* Educator review: watch the lesson before approving it */
+.review-watch { max-width: 860px; margin: 1rem 0 1.5rem; }
+.review-watch .watch-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: .6rem; }

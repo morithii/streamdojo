@@ -11,7 +11,7 @@
 import { initAuth, signIn, signOut, currentUser } from "./auth.js";
 import { api, setApiBase } from "./api.js";
 import { el, formatDuration, sensei } from "./dom.js";
-import { attachStream, stopPlayer } from "./player.js";
+import { lessonPlayer, stopPlayer } from "./player.js";
 import { runPractice } from "./practice.js";
 import { renderTeach, renderReview, renderInsights } from "./teach.js";
 import { renderCreate } from "./create.js";
@@ -22,7 +22,7 @@ const app = document.getElementById("app");
 const account = document.getElementById("account");
 const go = (hash) => () => { location.hash = hash; };
 
-// Top-right navigation: one button per role the user has, then Sign out.
+// Top-right navigation, left to right: Creator, Educator, Learner, then the bell and Sign out.
 // Everyone signed in can learn; Creator and Educator appear only for those Cognito groups.
 function renderAccount() {
   const user = currentUser();
@@ -37,9 +37,9 @@ function renderAccount() {
     ariaCurrent: section === key ? "page" : null,
   }, label);
   account.replaceChildren(
-    link("learn", "#/", "Learner"),
     user.groups.includes("creators") ? link("create", "#/create", "Creator") : "",
     user.groups.includes("educators") ? link("teach", "#/teach", "Educator") : "",
+    link("learn", "#/", "Learner"),
     bell(),
     el("button", { className: "btn ghost", onclick: signOut }, "Sign out"),
   );
@@ -75,26 +75,13 @@ function reviewsBanner(reviews) {
 // ---------------------------------------------------------------------------
 // Player
 // ---------------------------------------------------------------------------
-function showSubtitles(video, lang) {
-  for (const track of video.textTracks) {
-    track.mode = track.language === lang ? "showing" : "disabled";
-  }
-}
-
 async function renderWatch(videoId) {
   const [lesson, courses] = await Promise.all([api(`/catalogue/${encodeURIComponent(videoId)}`), loadCourses()]);
   const course = courses.find((c) => c.lessons.some((l) => l.videoId === videoId));
   const index = course ? course.lessons.findIndex((l) => l.videoId === videoId) : -1;
   const previous = index > 0 ? course.lessons[index - 1] : null;
   const next = course && index < course.lessons.length - 1 ? course.lessons[index + 1] : null;
-  const video = el("video", { controls: true, playsInline: true, preload: "metadata", poster: lesson.thumbnailUrl || "" });
-  for (const sub of lesson.subtitles) {
-    video.append(el("track", { kind: "subtitles", src: sub.url, srclang: sub.lang, label: sub.label, default: sub.lang === "en" }));
-  }
-  const picker = el("select", { className: "picker", ariaLabel: "Subtitles", onchange: (e) => showSubtitles(video, e.target.value) },
-    el("option", { value: "off" }, "Subtitles off"),
-    ...lesson.subtitles.map((sub) => el("option", { value: sub.lang, selected: sub.lang === "en" }, sub.label)),
-  );
+  const { video, picker, start } = lessonPlayer(lesson);
   const practise = el("button", { className: "btn", onclick: go(`#/practise/${encodeURIComponent(videoId)}`) }, "Practise with ClipSensei");
   const coach = sensei("Show me what you have learned.");
   video.addEventListener("ended", () => {
@@ -129,9 +116,7 @@ async function renderWatch(videoId) {
       ) : null,
     ),
   );
-  attachStream(video, lesson.hlsUrl);
-  video.textTracks.addEventListener("addtrack", () => showSubtitles(video, picker.value));
-  showSubtitles(video, picker.value);
+  start();
 }
 
 // ---------------------------------------------------------------------------

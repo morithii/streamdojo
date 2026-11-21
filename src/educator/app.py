@@ -24,6 +24,8 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "")
 KEYS_TABLE_NAME = os.environ.get("KEYS_TABLE_NAME", "")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 TIMESTAMP = re.compile(r"^\d{1,3}:\d{2}$")
+MEDIA_PREFIX = "/media/"             # CloudFront serves the media bucket here (same paths the learner player uses)
+LANGUAGE_NAMES = {"en": "English", "fr": "Français", "es": "Español", "it": "Italiano", "el": "Ελληνικά"}
 MAX_OBJECTIVES = 5
 
 _tables = {}
@@ -108,9 +110,17 @@ def get_objectives(video_id):
                            "timestamp": p["timestamp"], "status": p["status"],
                            "essentialPoints": k.get("essentialPoints", []), "modelAnswer": k.get("modelAnswer"),
                            "hint": k.get("hint")})
+    # The educator must be able to WATCH the draft before approving it: same HLS stream and subtitles
+    # the learner will get. Drafts are already transcoded - only publishing is pending.
+    languages = sorted(lesson.get("subtitleLanguages", set()), key=lambda l: (l != "en", l))   # English first
+    subtitles = [{"lang": lang, "label": LANGUAGE_NAMES.get(lang, lang),
+                  "url": f"{MEDIA_PREFIX}processed/{video_id}/transcript/subtitles.{lang}.vtt"} for lang in languages]
+    media = lambda key: MEDIA_PREFIX + lesson[key] if lesson.get(key) else None    # noqa: E731
     return response(200, {"videoId": video_id, "title": lesson.get("title"), "suggestedTitle": lesson.get("suggestedTitle"),
                           "position": lesson.get("position"), "topicName": lesson.get("topicName"),
-                          "objectivesStatus": lesson.get("objectivesStatus"), "objectives": objectives})
+                          "objectivesStatus": lesson.get("objectivesStatus"), "objectives": objectives,
+                          "hlsUrl": media("hlsPath"), "thumbnailUrl": media("thumbnailPath"),
+                          "durationMs": lesson.get("durationMs"), "subtitles": subtitles})
 
 
 def validate_edit(body):

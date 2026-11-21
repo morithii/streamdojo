@@ -32,8 +32,11 @@ web = {"color": "#2ec4b6", "penwidth": "2"}           # browser traffic
 pipe = {"color": "#e7871d", "penwidth": "2"}          # upload pipeline
 ai = {"color": "#8a63d2", "penwidth": "2"}            # ClipSensei / Bedrock
 ops = {"color": "#888888", "style": "dashed"}         # operations
+biz = {"color": "#d6336c", "penwidth": "2"}           # business events -> notification bell
 
-with Diagram("StreamDojo - serverless video learning with ClipSensei (eu-west-2)", filename=str(OUT), show=False,
+with Diagram("StreamDojo - serverless video learning with ClipSensei (eu-west-2)\n"
+             "teal = browser traffic   orange = upload pipeline   purple = ClipSensei (Bedrock)   "
+             "pink = business events -> bell   grey = data   dashed = failures / secrets", filename=str(OUT), show=False,
              direction="TB", graph_attr=graph, node_attr=node, outformat="png"):
     people = Users("Creators · Educators\nLearners")
 
@@ -55,6 +58,7 @@ with Diagram("StreamDojo - serverless video learning with ClipSensei (eu-west-2)
             marking = Lambda("marking\nClipSensei marks")
             educator = Lambda("educator\nreview · publish")
             insights = Lambda("insights\nwhat's sticking")
+            notifications = Lambda("notifications\nbell · mark read")
 
     with Cluster("Data (DynamoDB, on-demand, PITR)", graph_attr={**cluster_style, "bgcolor": "#f6f2fd"}):
         table = Dynamodb("App table\nlessons · schedules\nattempts · stats")
@@ -62,8 +66,13 @@ with Diagram("StreamDojo - serverless video learning with ClipSensei (eu-west-2)
 
     bedrock = Bedrock("Amazon Bedrock\nClaude Haiku 4.5\n= ClipSensei")
 
+    with Cluster("Business events -> in-app bell (event-driven)", graph_attr={**cluster_style, "bgcolor": "#fdf0f4"}):
+        bus = Eventbridge("Custom event bus\nstreamdojo-<env>-events\nDraftReady · Published\nRejected · LessonCompleted")
+        notify = Lambda("notify\nwho gets told?\n(idempotent, 30-day TTL)")
+        notify_dlq = SQS("dead-letter\nqueue")
+
     with Cluster("Upload pipeline (event-driven)", graph_attr={**cluster_style, "bgcolor": "#fff4ea"}):
-        events = Eventbridge("EventBridge\nObject Created")
+        events = Eventbridge("EventBridge (default bus)\nS3 Object Created")
         dlq = SQS("dead-letter\nqueue")
         flow = StepFunctions("Step Functions\nprocess-video")
         convert = ElementalMediaconvert("MediaConvert\nHLS 360/720/1080p")
@@ -77,11 +86,11 @@ with Diagram("StreamDojo - serverless video learning with ClipSensei (eu-west-2)
     cdn >> Edge(**web) >> site
     cdn >> Edge(label="/api", **web) >> api
     cdn >> Edge(label="/media (OAC)", **web) >> media
-    api >> Edge(**web) >> [videos, catalogue, learn, marking, educator, insights]
-    cognito >> Edge(style="dotted", color="#2ec4b6", label="JWT checked") >> api
+    api >> Edge(**web) >> [videos, catalogue, learn, marking, educator, insights, notifications]
+    cognito >> Edge(style="dotted", color="#2ec4b6", label="JWT checked", constraint="false") >> api
 
     # Data and ClipSensei
-    [videos, catalogue, learn, educator, insights] >> Edge(color="#7a7a7a") >> table
+    [videos, catalogue, learn, educator, insights, notifications] >> Edge(color="#7a7a7a") >> table
     marking >> Edge(color="#7a7a7a") >> table
     [marking, educator, insights] >> Edge(color="#7a7a7a", style="dashed") >> keys
     [marking, insights, generate] >> Edge(**ai) >> bedrock
@@ -94,6 +103,15 @@ with Diagram("StreamDojo - serverless video learning with ClipSensei (eu-west-2)
     convert >> Edge(**pipe) >> media
     translate >> Edge(**pipe) >> media
     generate >> Edge(**pipe) >> [table, keys]
+
+    # Business events: publishers never wait on the bell (best-effort put_events)
+    generate >> Edge(label="LessonDraftReady", **biz) >> bus
+    educator >> Edge(label="Published / Rejected\n(+ reason)", **biz) >> bus
+    marking >> Edge(label="LessonCompleted", **biz) >> bus
+    bus >> Edge(label="rule", **biz) >> notify
+    bus >> Edge(style="dashed", color="#d6336c", label="delivery failed") >> notify_dlq
+    notify >> Edge(style="dotted", color="#d6336c", label="who is in\neducators group?", constraint="false") >> cognito
+    notify >> Edge(label="NOTIF items\nper user", **biz) >> table
 
 
 with Diagram("StreamDojo - how it ships and how it is watched", filename=str(OPS_OUT), show=False,
