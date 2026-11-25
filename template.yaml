@@ -378,6 +378,7 @@ Resources:
           # CloudFront points at the API, the API at this function - a !Ref here would close that loop
           UPLOAD_BUCKET: !Sub streamdojo-${Environment}-uploads-${AWS::AccountId}
           ALLOWED_ORIGIN: !Ref FrontendUrl
+          EVENT_BUS_NAME: !Ref EventBus
       Policies:
         - Version: "2012-10-17"
           Statement:
@@ -385,6 +386,16 @@ Resources:
               Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt AppTable.Arn
+            - Sid: HideDeletedVideo       # read the lesson, mark it DELETED, take it out of every list
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+            - Sid: AnnounceDeletion       # LessonDeleted starts the cleanup function
+              Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt EventBus.Arn
             - Sid: ListMyVideos
               Effect: Allow
               Action: dynamodb:Query
@@ -408,6 +419,12 @@ Resources:
             RestApiId: !Ref StreamDojoApi
             Path: /videos
             Method: get
+        DeleteVideo:                      # the creator (own videos) or any educator
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /videos/{videoId}
+            Method: delete
 
   # ===========================================================================
   # Steps 6-7: processing pipeline (upload -> EventBridge -> Step Functions -> MediaConvert)
@@ -1218,12 +1235,72 @@ Resources:
             EventBusName: !Ref EventBus
             Pattern:
               source: [streamdojo]
-              detail-type: [LessonDraftReady, LessonPublished, LessonRejected, PracticeCompleted]
+              detail-type: [LessonDraftReady, LessonPublished, LessonRejected, PracticeCompleted, LessonDeleted]
             RetryPolicy:
               MaximumRetryAttempts: 3
               MaximumEventAgeInSeconds: 3600
             DeadLetterConfig:
               Type: SQS                   # notifications that still fail land here, never lost silently
+
+  # Deleting a video: removes its data, learner records, files and cached copies (LessonDeleted)
+  CleanupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-cleanup
+      CodeUri: src/cleanup/
+      Handler: app.handler
+      Timeout: 300
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          KEYS_TABLE_NAME: !Ref AnswerKeysTable
+          UPLOAD_BUCKET: !Ref UploadBucket
+          MEDIA_BUCKET: !Ref ProcessedBucket
+          DISTRIBUTION_ID: !Ref SiteDistribution
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: RemoveLessonData
+              Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:DeleteItem
+                - dynamodb:BatchWriteItem
+              Resource:
+                - !GetAtt AppTable.Arn
+                - !GetAtt AnswerKeysTable.Arn
+            - Sid: ListOnlyVideoFolders
+              Effect: Allow
+              Action: s3:ListBucket
+              Resource:
+                - !GetAtt UploadBucket.Arn
+                - !GetAtt ProcessedBucket.Arn
+              Condition:
+                StringLike:
+                  s3:prefix: [raw/*, processed/*]
+            - Sid: DeleteVideoFiles
+              Effect: Allow
+              Action: s3:DeleteObject
+              Resource:
+                - !Sub ${UploadBucket.Arn}/raw/*
+                - !Sub ${ProcessedBucket.Arn}/processed/*
+            - Sid: ClearCachedCopies
+              Effect: Allow
+              Action: cloudfront:CreateInvalidation
+              Resource: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}
+      Events:
+        LessonDeleted:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBus
+            Pattern:
+              source: [streamdojo]
+              detail-type: [LessonDeleted]
+            RetryPolicy:
+              MaximumRetryAttempts: 3
+              MaximumEventAgeInSeconds: 3600
+            DeadLetterConfig:
+              Type: SQS                   # a cleanup that keeps failing waits here - never lost
 
   # API: what the bell reads - each user only ever sees their own notifications
   NotificationsFunction:

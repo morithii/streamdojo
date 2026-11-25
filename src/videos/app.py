@@ -1,4 +1,5 @@
 """POST /videos and GET /videos - creators start uploads and list their own videos.
+DELETE /videos/{videoId} - a creator deletes their own video, or an educator deletes any lesson.
 
 POST returns a presigned POST: a short-lived, signed form that lets the browser
 upload straight to S3. The video never passes through Lambda or API Gateway
@@ -17,6 +18,7 @@ from botocore.config import Config
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 UPLOAD_BUCKET = os.environ.get("UPLOAD_BUCKET", "")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
+EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "")
 REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
 MAX_BYTES = 2 * 1024 ** 3                 # 2 GB per video
@@ -25,6 +27,8 @@ CONTENT_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov"}
 
 _table = None
 _s3 = None
+_events = None
+BUSY_MINUTES = 60                         # a video still in the pipeline after this long has stalled: deletable
 
 
 def table():
@@ -149,8 +153,75 @@ def list_videos(user_id):
     return response(200, {"videos": videos})
 
 
+# ---------------------------------------------------------------------------
+# Delete: hide the lesson NOW, then let the cleanup function remove everything else
+# ---------------------------------------------------------------------------
+def pipeline_busy(item, now):
+    """True while Step Functions is still working on this video (deleting then would race the pipeline)."""
+    if item.get("processingStatus") in ("UPLOADING", "FAILED", "DELETED"):
+        return False
+    if item.get("captionStatus") == "FAILED" or item.get("objectivesStatus") in ("DRAFT_READY", "PUBLISHED", "REJECTED", "FAILED"):
+        return False                                                                # finished, one way or another
+    started = item.get("processingStartedAt") or item.get("createdAt")
+    minutes = (now - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds() / 60
+    return minutes < BUSY_MINUTES
+
+
+def events():
+    global _events
+    if _events is None:
+        _events = boto3.client("events")
+    return _events
+
+
+def delete_video(user_id, groups, video_id, body):
+    key = {"PK": f"VIDEO#{video_id}", "SK": "META"}
+    item = table().get_item(Key=key).get("Item")
+    if not item:
+        return response(404, {"message": "Video not found"})
+    is_owner = item.get("creatorSub") == user_id and "creators" in groups
+    is_educator = "educators" in groups
+    if not (is_owner or is_educator):
+        return response(403, {"message": "Only the video's creator or an educator can delete it"})
+    reason = str(body.get("reason") or "").strip()[:500]
+    now = datetime.now(timezone.utc)
+
+    if not item.get("deletedAt"):                  # a retry after a failed announce skips straight to the event
+        if pipeline_busy(item, now):
+            return response(409, {"message": "This video is still being processed. Try again when the tracker shows it has finished."})
+        try:
+            # Gone from every list at once (catalogue, drafts queue, creator's uploads). DELETED also stops a
+            # pipeline that hasn't started yet: its first step only claims videos that are still UPLOADING.
+            table().update_item(
+                Key=key,
+                UpdateExpression=("SET deletedAt = :now, deletedBy = :u, processingStatus = :deleted "
+                                  "REMOVE GSI1PK, GSI1SK, GSI2PK, GSI2SK"),
+                ConditionExpression="attribute_not_exists(deletedAt)",
+                ExpressionAttributeValues={":now": now.isoformat(timespec="seconds"), ":u": user_id, ":deleted": "DELETED"})
+        except Exception as error:                 # noqa: BLE001
+            if "ConditionalCheckFailed" not in type(error).__name__ + str(error):
+                raise                              # someone else deleting it at the same moment is fine
+
+    detail = {"videoId": video_id, "title": item.get("title"), "creatorSub": item.get("creatorSub"),
+              "topicId": item.get("topicId"), "deletedBy": item.get("deletedBy", user_id),
+              "byEducator": not is_owner, "reason": reason}
+    # Unlike notifications, this event MUST go out: it's what starts the cleanup
+    result = events().put_events(Entries=[{"EventBusName": EVENT_BUS_NAME, "Source": "streamdojo",
+                                           "DetailType": "LessonDeleted", "Detail": json.dumps(detail, default=str)}])
+    if result.get("FailedEntryCount"):
+        return response(502, {"message": "The video is hidden, but its cleanup didn't start. Please try deleting it again."})
+    print(json.dumps({"level": "INFO", "message": "video deleted", "videoId": video_id, "by": user_id, "byEducator": not is_owner}))
+    return response(202, {"videoId": video_id, "message": "Deleted. Its files and learner data are being removed."})
+
+
 def handler(event, context):
     user_id, groups = caller(event)
+    if event["httpMethod"] == "DELETE":
+        try:
+            body = json.loads(event.get("body") or "{}")
+        except json.JSONDecodeError:
+            body = {}
+        return delete_video(user_id, groups, event["pathParameters"]["videoId"], body)
     if "creators" not in groups:
         return response(403, {"message": "Only creators can upload or list uploads"})
 

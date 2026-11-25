@@ -73,6 +73,17 @@ def test_draft_ready_warns_educators_when_the_safety_check_flagged_it():
     assert "safety" not in next(iter(m._clients["table"].items.values()))["message"]
 
 
+def test_creator_is_told_when_an_educator_deletes_their_video_but_not_when_they_do():
+    m = notifier()
+    m.handler(event("LessonDeleted", {"videoId": "v1", "title": "AWS", "creatorSub": "c1", "byEducator": True,
+                                      "reason": "Duplicate"}), None)
+    ((key, item),) = m._clients["table"].items.items()
+    assert key[0] == "USER#c1" and "An educator removed “AWS”. Reason: Duplicate" in item["message"]
+    m = notifier()
+    m.handler(event("LessonDeleted", {"videoId": "v1", "title": "AWS", "creatorSub": "c1", "byEducator": False}), None)
+    assert m._clients["table"].items == {}
+
+
 def test_duplicate_delivery_never_duplicates_a_notification():
     m = notifier()
     e = event("LessonRejected", {"videoId": "v1", "title": "AWS", "creatorSub": "c1", "reason": "Audio too quiet"})

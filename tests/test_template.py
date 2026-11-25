@@ -115,7 +115,10 @@ def test_learner_facing_code_cannot_read_answer_keys():
     resources = load_template()["Resources"]
     readers = [name for name, r in resources.items()
                if r["Type"] == "AWS::Serverless::Function" and "AnswerKeysTable" in str(r["Properties"].get("Policies", ""))]
-    assert sorted(readers) == ["EducatorFunction", "GenerateObjectivesFunction", "InsightsFunction", "MarkingFunction"]
+    assert sorted(readers) == ["CleanupFunction", "EducatorFunction", "GenerateObjectivesFunction", "InsightsFunction", "MarkingFunction"]
+    # the cleanup function only ever deletes keys of a DELETED video - and it isn't reachable from the API
+    cleanup = resources["CleanupFunction"]["Properties"]
+    assert "Api" not in str(cleanup["Events"])
 
 
 
@@ -195,12 +198,13 @@ def test_dashboard_body_is_valid_json():
             assert isinstance(entry, list), (widget["properties"]["title"], entry)
             assert all(isinstance(x, str) for x in entry[:-1]) and isinstance(entry[-1], (str, dict))
 
-def test_only_the_three_publishers_can_announce_events_and_only_on_our_bus():
+def test_only_the_four_publishers_can_announce_events_and_only_on_our_bus():
     resources = load_template()["Resources"]
     publishers = sorted(n for n, r in resources.items() if "events:PutEvents" in str(r.get("Properties", {}).get("Policies", "")))
-    assert publishers == ["EducatorFunction", "GenerateObjectivesFunction", "MarkingFunction"]
+    assert publishers == ["EducatorFunction", "GenerateObjectivesFunction", "MarkingFunction", "VideosFunction"]
     for name in publishers:
-        statement = [s for s in resources[name]["Properties"]["Policies"][0]["Statement"] if s["Sid"] == "AnnounceBusinessEvents"][0]
+        statement = [s for s in resources[name]["Properties"]["Policies"][0]["Statement"]
+                     if s["Sid"] in ("AnnounceBusinessEvents", "AnnounceDeletion")][0]
         assert "EventBus" in str(statement["Resource"])                      # never "*"
 
 
@@ -231,3 +235,17 @@ def test_transcode_progress_listens_only_to_streamdojo_status_updates():
     assert pattern["detail"]["userMetadata"]["videoId"] == [{"exists": True}]
     (statement,) = fn["Policies"][0]["Statement"]
     assert statement["Action"] == "dynamodb:UpdateItem"                     # write-only, one table
+
+
+def test_delete_route_and_cleanup_permissions_are_narrow():
+    resources = load_template()["Resources"]
+    videos = resources["VideosFunction"]["Properties"]
+    assert videos["Events"]["DeleteVideo"]["Properties"]["Method"] == "delete"
+    cleanup = {s["Sid"]: s for s in resources["CleanupFunction"]["Properties"]["Policies"][0]["Statement"]}
+    assert cleanup["DeleteVideoFiles"]["Action"] == "s3:DeleteObject"                       # files under raw/ and processed/ only
+    resources_ = [r["Fn::Sub"] for r in cleanup["DeleteVideoFiles"]["Resource"]]
+    assert resources_[0].endswith("/raw/*") and resources_[1].endswith("/processed/*")
+    assert cleanup["ListOnlyVideoFolders"]["Condition"]["StringLike"]["s3:prefix"] == ["raw/*", "processed/*"]
+    assert "dynamodb:Scan" not in str(cleanup)                                              # targeted deletes, no scans
+    rule = resources["CleanupFunction"]["Properties"]["Events"]["LessonDeleted"]["Properties"]
+    assert rule["Pattern"]["detail-type"] == ["LessonDeleted"] and rule["DeadLetterConfig"]["Type"] == "SQS"

@@ -352,3 +352,16 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .lang.have { border-color: var(--accent); color: var(--text); }
 @media (max-width: 620px) { .langs { justify-content: start; } }
 @media (prefers-reduced-motion: reduce) { .step .bar span { transition: none; } }
+
+/* Deleting a video (creator uploads + educator review page) */
+.delete-control { margin-top: 0.9rem; }
+.btn.danger { color: var(--miss); border-color: color-mix(in srgb, var(--miss) 55%, transparent); }
+.btn.danger:hover:not(:disabled) { border-color: var(--miss); }
+.btn.danger.solid { background: var(--miss); color: var(--bg); border-color: var(--miss); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.delete-confirm { border: 1px solid var(--miss); border-radius: var(--radius); padding: 0.9rem 1rem; max-width: 560px;
+  background: color-mix(in srgb, var(--miss) 8%, var(--panel)); }
+.delete-confirm p { margin: 0 0 0.6rem; }
+.delete-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.danger-zone { margin-top: 2.5rem; padding-top: 1.2rem; border-top: 1px solid var(--line); }
+.danger-zone h2 { font-size: 1.05rem; }

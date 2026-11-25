@@ -91,3 +91,98 @@ def test_list_includes_progress_details_as_plain_json():
                            "subtitleLanguages": {"fr", "en"}, "objectiveCount": Decimal(2)}])   # what DynamoDB returns
     body = json.loads(videos.handler(event("creators", method="GET"), None)["body"])
     assert body["videos"][0]["subtitleLanguages"] == ["en", "fr"] and body["videos"][0]["objectiveCount"] == 2
+
+
+# ---------------------------------------------------------------------------
+# DELETE /videos/{videoId}
+# ---------------------------------------------------------------------------
+class FakeLessonTable:
+    def __init__(self, item):
+        self.item, self.updates = item, []
+
+    def get_item(self, Key):
+        return {"Item": dict(self.item)} if self.item else {}
+
+    def update_item(self, **kwargs):
+        if "attribute_not_exists(deletedAt)" in kwargs.get("ConditionExpression", "") and self.item.get("deletedAt"):
+            raise RuntimeError("ConditionalCheckFailedException")
+        self.updates.append(kwargs)
+        self.item.update(deletedAt=kwargs["ExpressionAttributeValues"][":now"], deletedBy=kwargs["ExpressionAttributeValues"][":u"],
+                         processingStatus="DELETED")
+        for gsi in ("GSI1PK", "GSI1SK", "GSI2PK", "GSI2SK"):
+            self.item.pop(gsi, None)
+
+
+class FakeEvents:
+    def __init__(self, fail=False):
+        self.sent, self.fail = [], fail
+
+    def put_events(self, Entries):
+        self.sent.extend(Entries)
+        return {"FailedEntryCount": 1 if self.fail else 0}
+
+
+def finished_lesson(**extra):
+    return {"PK": "VIDEO#v1", "SK": "META", "title": "OAC explained", "creatorSub": "creator-1", "topicId": "cloud",
+            "createdAt": "2026-11-01T10:00:00+00:00", "processingStartedAt": "2026-11-01T10:00:05+00:00",
+            "processingStatus": "READY", "captionStatus": "READY", "objectivesStatus": "PUBLISHED",
+            "GSI1PK": "CATALOGUE", "GSI1SK": "x", "GSI2PK": "CREATOR#creator-1", "GSI2SK": "y", **extra}
+
+
+def delete_event(groups, sub="creator-1", body=None):
+    return {"httpMethod": "DELETE", "pathParameters": {"videoId": "v1"}, "body": json.dumps(body) if body else None,
+            "requestContext": {"authorizer": {"claims": {"sub": sub, "cognito:groups": groups}}}}
+
+
+def setup_delete(item, fail=False):
+    videos = load()
+    videos._table, videos._events = FakeLessonTable(item), FakeEvents(fail)
+    return videos
+
+
+def test_creator_deletes_own_video_it_disappears_at_once_and_cleanup_is_announced():
+    videos = setup_delete(finished_lesson())
+    res = videos.handler(delete_event("[creators]"), None)
+    assert res["statusCode"] == 202
+    item = videos._table.item
+    assert item["processingStatus"] == "DELETED" and "GSI1PK" not in item and "GSI2PK" not in item   # out of every list
+    (sent,) = videos._events.sent
+    detail = json.loads(sent["Detail"])
+    assert sent["DetailType"] == "LessonDeleted" and detail["videoId"] == "v1" and detail["byEducator"] is False
+
+
+def test_another_creator_cannot_delete_but_an_educator_can_with_a_reason():
+    videos = setup_delete(finished_lesson())
+    assert videos.handler(delete_event("[creators]", sub="someone-else"), None)["statusCode"] == 403
+    assert videos.handler(delete_event("[learners]"), None)["statusCode"] == 403
+    res = videos.handler(delete_event("[educators]", sub="edu-1", body={"reason": "Duplicate of lesson 3"}), None)
+    assert res["statusCode"] == 202
+    detail = json.loads(videos._events.sent[0]["Detail"])
+    assert detail["byEducator"] is True and detail["reason"] == "Duplicate of lesson 3" and detail["creatorSub"] == "creator-1"
+
+
+def test_cannot_delete_while_the_pipeline_is_still_working_on_it():
+    from datetime import datetime, timezone
+    just_now = datetime.now(timezone.utc).isoformat()
+    busy = finished_lesson(processingStatus="PROCESSING", captionStatus="PENDING", objectivesStatus="PENDING",
+                           createdAt=just_now, processingStartedAt=just_now)
+    videos = setup_delete(busy)
+    assert videos.handler(delete_event("[creators]"), None)["statusCode"] == 409
+    assert videos._events.sent == []
+    # an upload that never arrived, or a failed one, can be deleted straight away
+    for status in ("UPLOADING", "FAILED"):
+        videos = setup_delete({**busy, "processingStatus": status})
+        assert videos.handler(delete_event("[creators]"), None)["statusCode"] == 202
+
+
+def test_if_the_cleanup_event_fails_a_retry_resends_it():
+    videos = setup_delete(finished_lesson(), fail=True)
+    assert videos.handler(delete_event("[creators]"), None)["statusCode"] == 502       # hidden, but cleanup didn't start
+    videos._events = FakeEvents()
+    assert videos.handler(delete_event("[creators]"), None)["statusCode"] == 202       # already DELETED -> just re-announce
+    assert len(videos._table.updates) == 1                                            # hidden only once
+
+
+def test_unknown_video_is_404():
+    videos = setup_delete(None)
+    assert videos.handler(delete_event("[creators]"), None)["statusCode"] == 404

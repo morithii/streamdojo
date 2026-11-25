@@ -9,6 +9,7 @@
 // =============================================================================
 import { el, sensei } from "./dom.js";
 import { api } from "./api.js";
+import { deleteControl } from "./remove.js";
 
 const MAX_BYTES = 2 * 1024 ** 3;
 const TYPES = { "video/mp4": "MP4", "video/quicktime": "MOV" };
@@ -177,6 +178,10 @@ async function renderUploads(list, isEducator) {
       ),
       summary(v),
       tracker(v),
+      deleteControl(v.videoId, v.title, {
+        onDone: () => renderUploads(list, isEducator).catch(() => {}),
+        disabledReason: isBusy(v) ? "You can delete it once processing has finished" : "",
+      }),
     )) : [el("p", { className: "meta" }, "No uploads yet.")]));
   // Keep checking every 5 seconds while anything is still moving through the pipeline
   clearTimeout(pollTimer);

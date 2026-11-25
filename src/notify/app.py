@@ -58,6 +58,12 @@ def educators():
 def describe(detail_type, d):
     """(recipients, message, link) for each kind of event. Unknown events notify nobody."""
     title = d.get("title") or "A lesson"
+    if detail_type == "LessonDeleted":
+        # Only worth telling the creator when SOMEONE ELSE (an educator) removed their video
+        if not d.get("byEducator") or not d.get("creatorSub"):
+            return [], "", ""
+        reason = f" Reason: {d['reason']}" if d.get("reason") else ""
+        return [d["creatorSub"]], f"An educator removed “{title}”.{reason}", "#/create"
     if detail_type == "LessonDraftReady":
         message = f"“{title}” is ready for review - ClipSensei drafted {d.get('objectiveCount', 0)} question(s)."
         if d.get("moderationStatus") == "FLAGGED":

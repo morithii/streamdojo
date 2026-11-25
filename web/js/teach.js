@@ -10,6 +10,7 @@
 import { el, sensei } from "./dom.js";
 import { api } from "./api.js";
 import { lessonPlayer } from "./player.js";
+import { deleteControl } from "./remove.js";
 
 const MAX_OBJECTIVES = 5;
 const enc = encodeURIComponent;
@@ -322,6 +323,10 @@ export async function renderReview(app, videoId) {
       list,
       addButton,
       el("div", { className: "decision" }, publishPanel, rejectPanel),
+      el("section", { className: "danger-zone" },
+        el("h2", {}, "Remove this lesson"),
+        el("p", { className: "meta" }, "For duplicates, wrong uploads or unsuitable content. Learners lose access straight away."),
+        deleteControl(videoId, lesson.title, { askReason: true, onDone: () => { location.hash = "#/teach"; } })),
     ),
   );
   if (player) player.start();                   // attach the stream once the <video> is on the page
