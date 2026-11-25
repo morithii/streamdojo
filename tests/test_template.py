@@ -209,3 +209,16 @@ def test_notifier_can_only_write_user_notification_items():
     write = [s for s in statements if s["Sid"] == "WriteNotificationsOnly"][0]
     assert write["Action"] == "dynamodb:PutItem"
     assert write["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"] == ["USER#*"]
+
+
+def test_safety_check_permissions_are_narrow():
+    resources = load_template()["Resources"]
+    machine = resources["ProcessVideoStateMachine"]["Properties"]
+    assert "ModerationFunctionArn" in machine["DefinitionSubstitutions"]
+    statements = {s["Sid"]: s for s in machine["Policies"][0]["Statement"]}
+    assert set(statements["RunSafetyCheckJobs"]["Action"]) == {"rekognition:StartContentModeration", "rekognition:GetContentModeration"}
+    assert statements["SafetyCheckReadsUpload"]["Action"] == "s3:GetObject"                  # read only, raw uploads only
+    assert statements["SafetyCheckReadsUpload"]["Resource"]["Fn::Sub"].endswith("/raw/*")
+    moderation = {s["Sid"]: s for s in resources["ModerationFunction"]["Properties"]["Policies"][0]["Statement"]}
+    assert moderation["RecordSafetyCheck"]["Action"] == "dynamodb:UpdateItem"                # can't read or delete lessons
+    assert moderation["ReadSafetyCheckResults"]["Action"] == "rekognition:GetContentModeration"

@@ -92,7 +92,7 @@ def slug(text):
 def list_drafts():
     result = table(TABLE_NAME).query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq("DRAFTS"),
                                      ScanIndexForward=True, Limit=50)          # oldest first: a fair queue
-    fields = ["videoId", "title", "createdAt", "captionStatus", "objectivesStatus", "objectiveCount"]
+    fields = ["videoId", "title", "createdAt", "captionStatus", "objectivesStatus", "objectiveCount", "moderationStatus"]
     return response(200, {"lessons": [{f: i.get(f) for f in fields} for i in result.get("Items", [])]})
 
 
@@ -120,7 +120,12 @@ def get_objectives(video_id):
                           "position": lesson.get("position"), "topicName": lesson.get("topicName"),
                           "objectivesStatus": lesson.get("objectivesStatus"), "objectives": objectives,
                           "hlsUrl": media("hlsPath"), "thumbnailUrl": media("thumbnailPath"),
-                          "durationMs": lesson.get("durationMs"), "subtitles": subtitles})
+                          "durationMs": lesson.get("durationMs"), "subtitles": subtitles,
+                          # Rekognition safety check: CLEAN / FLAGGED / UNCHECKED, with the flagged moments
+                          "moderationStatus": lesson.get("moderationStatus"), "moderationNote": lesson.get("moderationNote"),
+                          "moderationFlags": [{**f, "confidence": int(f.get("confidence", 0)),
+                                               "startMs": int(f.get("startMs", 0)), "endMs": int(f.get("endMs", 0))}
+                                              for f in lesson.get("moderationFlags") or []]})
 
 
 def validate_edit(body):
@@ -249,6 +254,11 @@ def publish(video_id, body, user_id):
         return response(404, {"message": "Lesson not found"})
     if lesson.get("processingStatus") != "READY" or lesson.get("objectivesStatus") != "DRAFT_READY":
         return response(409, {"message": "Only a READY lesson with draft objectives can be published"})
+    # The safety check flags, a person decides: a FLAGGED lesson needs the educator to confirm they watched it
+    flagged = lesson.get("moderationStatus") == "FLAGGED"
+    if flagged and body.get("confirmSafetyReview") is not True:
+        return response(409, {"message": "The safety check flagged this lesson. Watch the flagged moments, then confirm it is suitable.",
+                              "code": "SAFETY_REVIEW_REQUIRED"})
 
     topic_id, published_at = slug(topic), now()
     objectives = [i for i in table(TABLE_NAME).query(KeyConditionExpression=Key("PK").eq(f"VIDEO#{video_id}") & Key("SK").begins_with("OBJ#"))["Items"]
@@ -265,7 +275,8 @@ def publish(video_id, body, user_id):
     table(TABLE_NAME).update_item(
         Key=lesson_key,
         UpdateExpression=("SET objectivesStatus = :pub, topicId = :t, topicName = :tn, publishedBy = :u, "
-                          "publishedAt = :at, GSI1PK = :cat, GSI1SK = :sk"),
+                          "publishedAt = :at, GSI1PK = :cat, GSI1SK = :sk"
+                          + (", safetyReviewedBy = :u, safetyReviewedAt = :at" if flagged else "")),   # who overrode the flag, and when
         ConditionExpression="objectivesStatus = :draft",
         ExpressionAttributeValues={":pub": "PUBLISHED", ":t": topic_id, ":tn": topic, ":u": user_id, ":at": published_at,
                                    ":cat": "CATALOGUE", ":sk": f"{published_at}#{video_id}", ":draft": "DRAFT_READY"})

@@ -55,9 +55,10 @@ def test_translates_four_languages_in_parallel():
 
 
 
-def test_clipsensei_runs_after_captions_and_its_failure_is_contained():
-    assert STATES["MarkCaptionsReady"]["Next"] == "GenerateObjectives"
-    assert STATES["MarkCaptionsPartial"]["Next"] == "GenerateObjectives"
+def test_clipsensei_runs_after_captions_and_the_safety_check_and_its_failure_is_contained():
+    assert STATES["MarkCaptionsReady"]["Next"] == "WasSafetyCheckStarted"     # captions -> collect safety check
+    assert STATES["MarkCaptionsPartial"]["Next"] == "WasSafetyCheckStarted"
+    assert STATES["RecordSafetyCheck"]["Next"] == "GenerateObjectives"         # -> ClipSensei drafts
     assert [c["Next"] for c in STATES["GenerateObjectives"]["Catch"]] == ["MarkObjectivesFailed"]
     assert STATES["MarkObjectivesFailed"]["Next"] == "Done"
 
@@ -66,3 +67,24 @@ def test_thumbnail_is_taken_five_seconds_in_not_the_black_first_frame():
     text = json.dumps(ASL)
     assert '"MaxCaptures": 2' in text and '"FramerateDenominator": 5' in text   # frames at 0s and 5s
     assert "thumb.0000001.jpg" in text and "thumb.0000000.jpg" not in text      # use the 5s one
+
+
+def test_safety_check_starts_early_and_runs_alongside_transcoding():
+    assert STATES["MarkProcessing"]["Next"] == "StartSafetyCheck"
+    start = STATES["StartSafetyCheck"]
+    assert start["Resource"].endswith("rekognition:startContentModeration")
+    assert start["Parameters"]["Video"]["S3Object"] == {"Bucket.$": "$.bucket", "Name.$": "$.key"}   # the original upload
+    assert start["Parameters"]["ClientRequestToken.$"] == "$.videoId"                               # a retry never starts a 2nd job
+    assert start["Next"] == "Transcode"                                     # doesn't wait: it runs in parallel
+
+
+def test_safety_check_can_never_stop_the_lesson():
+    # couldn't start (e.g. not MP4/MOV H.264) -> still transcode, record UNCHECKED later
+    assert STATES["StartSafetyCheck"]["Catch"][0]["Next"] == "SafetyCheckNotStarted"
+    assert STATES["SafetyCheckNotStarted"]["Next"] == "Transcode"
+    assert STATES["WasSafetyCheckStarted"]["Default"] == "RecordSafetyCheck"
+    # polls like Transcribe, and any error goes on to record + ClipSensei
+    assert STATES["IsSafetyCheckDone"]["Choices"][0]["Next"] == "WaitForSafetyCheck"
+    assert STATES["WaitForSafetyCheck"]["Next"] == "CheckSafetyCheck"
+    assert STATES["CheckSafetyCheck"]["Catch"][0]["Next"] == "RecordSafetyCheck"
+    assert STATES["RecordSafetyCheck"]["Catch"][0]["Next"] == "GenerateObjectives"

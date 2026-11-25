@@ -62,6 +62,17 @@ def test_draft_ready_notifies_every_educator_with_a_link_to_review():
     assert item["read"] is False and item["expiresAt"] > 0
 
 
+def test_draft_ready_warns_educators_when_the_safety_check_flagged_it():
+    m = notifier()
+    m.handler(event("LessonDraftReady", {"videoId": "v1", "title": "AWS", "objectiveCount": 3,
+                                         "moderationStatus": "FLAGGED", "flagCount": 2}), None)
+    message = next(iter(m._clients["table"].items.values()))["message"]
+    assert message.startswith("⚠") and "flagged 2 moment(s)" in message
+    m = notifier()
+    m.handler(event("LessonDraftReady", {"videoId": "v1", "title": "AWS", "objectiveCount": 3, "moderationStatus": "CLEAN"}), None)
+    assert "safety" not in next(iter(m._clients["table"].items.values()))["message"]
+
+
 def test_duplicate_delivery_never_duplicates_a_notification():
     m = notifier()
     e = event("LessonRejected", {"videoId": "v1", "title": "AWS", "creatorSub": "c1", "reason": "Audio too quiet"})

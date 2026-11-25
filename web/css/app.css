@@ -324,3 +324,16 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 /* Educator review: watch the lesson before approving it */
 .review-watch { max-width: 860px; margin: 1rem 0 1.5rem; }
 .review-watch .watch-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: .6rem; }
+
+/* Safety check (Rekognition): flagged moments on the educator review page */
+.safety { border-radius: var(--radius); padding: 1rem 1.2rem; margin: 1rem 0; max-width: 860px; }
+.safety h2 { font-size: 1.1rem; }
+.safety p { margin: 0.25rem 0 0.6rem; }
+.safety.clean { padding: 0.6rem 1rem; border: 1px solid var(--good); color: var(--good); }
+.safety.unchecked { border: 1px solid var(--partial); background: color-mix(in srgb, var(--partial) 10%, var(--panel)); }
+.safety.flagged { border: 1px solid var(--miss); background: color-mix(in srgb, var(--miss) 12%, var(--panel)); }
+.flags { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.flags li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; padding: 0.5rem 0.75rem; background: var(--panel); border-radius: 8px; }
+.flag-label { font-weight: 600; }
+.confirm-safety { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0.8rem 0; cursor: pointer; max-width: 46ch; }
+.confirm-safety input { width: 1.2rem; height: 1.2rem; margin-top: 0.15rem; accent-color: var(--accent); flex: none; }

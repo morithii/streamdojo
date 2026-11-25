@@ -507,6 +507,7 @@ Resources:
         PrepareTranscriptFunctionArn: !GetAtt PrepareTranscriptFunction.Arn
         TranslateSubtitlesFunctionArn: !GetAtt TranslateSubtitlesFunction.Arn
         GenerateObjectivesFunctionArn: !GetAtt GenerateObjectivesFunction.Arn
+        ModerationFunctionArn: !GetAtt ModerationFunction.Arn
       Tracing:
         Enabled: true
       Logging:
@@ -582,6 +583,17 @@ Resources:
                 - !GetAtt PrepareTranscriptFunction.Arn
                 - !GetAtt TranslateSubtitlesFunction.Arn
                 - !GetAtt GenerateObjectivesFunction.Arn
+                - !GetAtt ModerationFunction.Arn
+            - Sid: RunSafetyCheckJobs       # Rekognition job IDs aren't known in advance
+              Effect: Allow
+              Action:
+                - rekognition:StartContentModeration
+                - rekognition:GetContentModeration
+              Resource: "*"
+            - Sid: SafetyCheckReadsUpload   # Rekognition reads the original video with the caller's S3 permissions
+              Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub ${UploadBucket.Arn}/raw/*
       Events:
         VideoUploaded:
           Type: EventBridgeRule
@@ -665,6 +677,30 @@ Resources:
   # ===========================================================================
 
   # ClipSensei: reads the transcript, drafts objectives + answer keys with Amazon Bedrock
+  # Safety check: summarises what Rekognition found and records CLEAN / FLAGGED / UNCHECKED on the lesson
+  ModerationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-moderation
+      CodeUri: src/moderation/
+      Handler: app.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          MIN_CONFIDENCE: "80"              # ignore labels Rekognition is less sure about
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadSafetyCheckResults   # job IDs aren't known in advance
+              Effect: Allow
+              Action: rekognition:GetContentModeration
+              Resource: "*"
+            - Sid: RecordSafetyCheck
+              Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+
   GenerateObjectivesFunction:
     Type: AWS::Serverless::Function
     Properties:

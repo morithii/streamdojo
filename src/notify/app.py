@@ -3,7 +3,7 @@
 Triggered by EventBridge (custom bus streamdojo-<env>-events). Publishers don't know or care who
 listens: they just announce what happened. This function decides WHO should hear about it.
 
-  LessonDraftReady   -> every educator      "'AWS' is ready for review"
+  LessonDraftReady   -> every educator      "'AWS' is ready for review" (+ a warning if the safety check flagged it)
   LessonPublished    -> the lesson's creator "'AWS' was approved and published"
   LessonRejected     -> the lesson's creator "'AWS' was not approved: <reason>"
   PracticeCompleted  -> every educator      "Alex completed 'AWS': 2 of 3 ideas recalled"
@@ -59,7 +59,12 @@ def describe(detail_type, d):
     """(recipients, message, link) for each kind of event. Unknown events notify nobody."""
     title = d.get("title") or "A lesson"
     if detail_type == "LessonDraftReady":
-        return educators(), f"“{title}” is ready for review - ClipSensei drafted {d.get('objectiveCount', 0)} question(s).", f"#/teach/review/{d['videoId']}"
+        message = f"“{title}” is ready for review - ClipSensei drafted {d.get('objectiveCount', 0)} question(s)."
+        if d.get("moderationStatus") == "FLAGGED":
+            message = f"⚠ {message} The safety check flagged {d.get('flagCount', 0)} moment(s) - watch them before publishing."
+        elif d.get("moderationStatus") == "UNCHECKED":
+            message += " The safety check couldn't run - please watch it all before publishing."
+        return educators(), message, f"#/teach/review/{d['videoId']}"
     if detail_type == "LessonPublished":
         return [d["creatorSub"]], f"“{title}” was approved and published in {d.get('topicName', 'a course')}.", "#/create"
     if detail_type == "LessonRejected":

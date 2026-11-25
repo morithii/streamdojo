@@ -204,5 +204,7 @@ def handler(event, context):
             ":st": str(data.get("suggestedTitle") or "").strip()[:120],   # the educator decides whether to use it
         },
     )
-    announce("LessonDraftReady", {"videoId": video_id, "title": lesson.get("title"), "objectiveCount": len(data["objectives"])})
+    announce("LessonDraftReady", {"videoId": video_id, "title": lesson.get("title"), "objectiveCount": len(data["objectives"]),
+                                  "moderationStatus": lesson.get("moderationStatus"),          # safety check, run just before this
+                                  "flagCount": len(lesson.get("moderationFlags") or [])})
     return {"videoId": video_id, "objectives": len(data["objectives"]), "inputTokens": tokens_in, "outputTokens": tokens_out}

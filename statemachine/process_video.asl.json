@@ -1,5 +1,5 @@
 {
-  "Comment": "StreamDojo ProcessVideo: start exactly once -> MediaConvert -> Transcribe -> Translate -> ClipSensei drafts learning objectives for educator review.",
+  "Comment": "StreamDojo ProcessVideo: start exactly once -> Rekognition safety check (runs in parallel) -> MediaConvert -> Transcribe -> Translate -> collect the safety check -> ClipSensei drafts learning objectives for educator review.",
   "StartAt": "ParseUploadEvent",
   "States": {
     "ParseUploadEvent": {
@@ -68,7 +68,7 @@
           "Next": "MarkFailed"
         }
       ],
-      "Next": "Transcode"
+      "Next": "StartSafetyCheck"
     },
     "AlreadyHandled": {
       "Type": "Succeed",
@@ -624,7 +624,7 @@
           "Next": "MarkCaptionsFailed"
         }
       ],
-      "Next": "GenerateObjectives"
+      "Next": "WasSafetyCheckStarted"
     },
     "MarkCaptionsPartial": {
       "Type": "Task",
@@ -647,7 +647,7 @@
         }
       },
       "ResultPath": null,
-      "Next": "GenerateObjectives"
+      "Next": "WasSafetyCheckStarted"
     },
     "MarkCaptionsFailed": {
       "Type": "Task",
@@ -734,6 +734,131 @@
       },
       "ResultPath": null,
       "Next": "Done"
+    },
+    "StartSafetyCheck": {
+      "Type": "Task",
+      "Comment": "Safety check: start Rekognition content moderation on the ORIGINAL upload. It's asynchronous, so it runs alongside transcoding, transcription and translation; the result is collected before ClipSensei drafts. The video ID is the idempotency token, so a retry never starts a second job.",
+      "Resource": "arn:aws:states:::aws-sdk:rekognition:startContentModeration",
+      "Parameters": {
+        "Video": {
+          "S3Object": {
+            "Bucket.$": "$.bucket",
+            "Name.$": "$.key"
+          }
+        },
+        "MinConfidence": 60,
+        "ClientRequestToken.$": "$.videoId",
+        "JobTag": "streamdojo-safety-check"
+      },
+      "ResultSelector": {
+        "jobId.$": "$.JobId"
+      },
+      "ResultPath": "$.moderation",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.moderationError",
+          "Next": "SafetyCheckNotStarted"
+        }
+      ],
+      "Next": "Transcode"
+    },
+    "SafetyCheckNotStarted": {
+      "Type": "Pass",
+      "Comment": "e.g. not MP4/MOV with H.264. Never stops the lesson: it's recorded as UNCHECKED later and the educator is told to watch it all.",
+      "Result": {
+        "skipped": true
+      },
+      "ResultPath": "$.moderation",
+      "Next": "Transcode"
+    },
+    "WasSafetyCheckStarted": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.moderation.jobId",
+          "IsPresent": true,
+          "Next": "CheckSafetyCheck"
+        }
+      ],
+      "Default": "RecordSafetyCheck"
+    },
+    "CheckSafetyCheck": {
+      "Type": "Task",
+      "Comment": "Rekognition has no .sync integration, so poll - same pattern as Transcribe. MaxResults 1: we only need the status here.",
+      "Resource": "arn:aws:states:::aws-sdk:rekognition:getContentModeration",
+      "Parameters": {
+        "JobId.$": "$.moderation.jobId",
+        "MaxResults": 1
+      },
+      "ResultSelector": {
+        "status.$": "$.JobStatus"
+      },
+      "ResultPath": "$.moderationCheck",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.moderationError",
+          "Next": "RecordSafetyCheck"
+        }
+      ],
+      "Next": "IsSafetyCheckDone"
+    },
+    "IsSafetyCheckDone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.moderationCheck.status",
+          "StringEquals": "IN_PROGRESS",
+          "Next": "WaitForSafetyCheck"
+        }
+      ],
+      "Default": "RecordSafetyCheck"
+    },
+    "WaitForSafetyCheck": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckSafetyCheck"
+    },
+    "RecordSafetyCheck": {
+      "Type": "Task",
+      "Comment": "Summarise the flagged moments and save CLEAN / FLAGGED / UNCHECKED on the lesson. Never blocks the pipeline.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ModerationFunctionArn}",
+        "Payload": {
+          "videoId.$": "$.videoId",
+          "moderation.$": "$.moderation"
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.moderationError",
+          "Next": "GenerateObjectives"
+        }
+      ],
+      "Next": "GenerateObjectives"
     }
   }
 }

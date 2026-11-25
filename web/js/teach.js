@@ -38,7 +38,7 @@ export async function renderTeach(app) {
         ? el("div", { className: "teach-list" }, ...drafts.map((d) =>
             el("article", { className: "teach-item" },
               el("div", {},
-                el("h3", {}, d.title || "Untitled lesson"),
+                el("h3", {}, d.title || "Untitled lesson", " ", safetyTag(d.moderationStatus)),
                 el("p", { className: "meta" }, `${d.objectiveCount || 0} objective(s) drafted by ClipSensei · subtitles: ${(d.captionStatus || "").toLowerCase() || "–"}`),
               ),
               el("a", { className: "btn", href: `#/teach/review/${enc(d.videoId)}` }, "Review & publish"),
@@ -157,6 +157,41 @@ function objectiveForm(lesson, objective, onDone, seek) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Safety check (Amazon Rekognition): the AI flags, the educator decides
+// ---------------------------------------------------------------------------
+function safetyTag(status) {
+  if (status === "FLAGGED") return el("span", { className: "tag bad" }, "⚠ flagged");
+  if (status === "UNCHECKED") return el("span", { className: "tag warn" }, "not checked");
+  if (status === "CLEAN") return el("span", { className: "tag good" }, "✓ safety check");
+  return null;                                   // lessons uploaded before the safety check existed
+}
+
+function safetyPanel(lesson, seek) {
+  const status = lesson.moderationStatus;
+  if (!status) return null;
+  if (status === "CLEAN") {
+    return el("p", { className: "safety clean", role: "status" }, "✓ Safety check passed: ", lesson.moderationNote || "nothing unsafe found.");
+  }
+  if (status === "UNCHECKED") {
+    return el("section", { className: "safety unchecked", role: "status" },
+      el("h2", {}, "Safety check didn't run"),
+      el("p", {}, lesson.moderationNote || "Please watch the whole video before publishing."));
+  }
+  const flags = lesson.moderationFlags || [];
+  return el("section", { className: "safety flagged", role: "alert" },
+    el("h2", {}, `⚠ Safety check flagged ${flags.length} moment${flags.length === 1 ? "" : "s"}`),
+    el("p", {}, "Amazon Rekognition found content that may be unsuitable. It can be wrong, so watch each moment and decide. ",
+      "You'll be asked to confirm before publishing."),
+    el("ul", { className: "flags" }, ...flags.map((f) =>
+      el("li", {},
+        el("span", { className: "flag-label" }, f.parent ? `${f.parent} › ${f.label}` : f.label),
+        el("span", { className: "meta" }, `${f.at}–${f.until} · ${f.confidence}% sure`),
+        seek ? el("button", { type: "button", className: "btn ghost small", onclick: () => seek(f.at) }, "▶ Play from here") : null,
+      ))),
+  );
+}
+
 export async function renderReview(app, videoId) {
   const lesson = await api(`/lessons/${enc(videoId)}/objectives`);
   const reload = () => renderReview(app, videoId);
@@ -213,17 +248,28 @@ export async function renderReview(app, videoId) {
       )
     : null;
 
+  const flagged = lesson.moderationStatus === "FLAGGED";
+  const confirmSafety = el("input", { type: "checkbox", id: "confirm-safety" });
   const publishPanel = isDraft
     ? el("section", { className: "publish" },
         el("h2", {}, "Publish"),
         el("p", { className: "meta" }, "Learners see this lesson only after you publish. Save each objective first."),
         field("Topic", topic),
+        flagged
+          ? el("label", { className: "confirm-safety", htmlFor: "confirm-safety" }, confirmSafety,
+              el("span", {}, "I've watched the flagged moments and this lesson is suitable for learners."))
+          : null,
         el("button", {
           className: "btn big",
           onclick: async () => {
+            if (flagged && !confirmSafety.checked) {
+              publishStatus.textContent = "Tick the box to confirm you've watched the flagged moments.";
+              confirmSafety.focus();
+              return;
+            }
             publishStatus.textContent = "Publishing…";
             try {
-              await api(`/lessons/${enc(videoId)}/publish`, { method: "POST", body: { topic: topic.value } });
+              await api(`/lessons/${enc(videoId)}/publish`, { method: "POST", body: { topic: topic.value, confirmSafetyReview: flagged && confirmSafety.checked } });
               location.hash = "#/teach";
             } catch (error) {
               publishStatus.textContent = error.message;
@@ -268,6 +314,7 @@ export async function renderReview(app, videoId) {
         el("small", {}, "Leave blank to keep the order lessons were published in. Lower numbers come first.")),
       titleStatus,
       suggestion,
+      safetyPanel(lesson, seek),
       watch,
       sensei(isDraft
         ? "I drafted these from the transcript. Check each key idea is a different idea - that's what makes the marking fair."

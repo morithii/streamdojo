@@ -178,6 +178,38 @@ def test_publish_moves_lesson_from_drafts_to_catalogue():
     assert ("TOPIC#cloudfront-s3", "LESSON#v1") in app.items
 
 
+def test_flagged_lesson_needs_the_educator_to_confirm_before_publishing():
+    edu, app, _ = setup_educator()
+    app.items[("VIDEO#v1", "META")].update({"moderationStatus": "FLAGGED", "moderationFlags": [
+        {"label": "Explicit Nudity", "parent": "Explicit", "confidence": 91, "startMs": 134000, "endMs": 140000,
+         "at": "02:14", "until": "02:20"}]})
+    path = "/lessons/{videoId}/publish"
+    res = edu.handler(educator_event("educators", "POST", path, {"videoId": "v1"}, {"topic": "CloudFront"}), None)
+    assert res["statusCode"] == 409 and json.loads(res["body"])["code"] == "SAFETY_REVIEW_REQUIRED"
+    assert app.items[("VIDEO#v1", "META")]["objectivesStatus"] == "DRAFT_READY"            # nothing published
+    res = edu.handler(educator_event("educators", "POST", path, {"videoId": "v1"},
+                                     {"topic": "CloudFront", "confirmSafetyReview": True}), None)
+    assert res["statusCode"] == 200
+    lesson = app.items[("VIDEO#v1", "META")]
+    assert lesson["objectivesStatus"] == "PUBLISHED" and lesson["safetyReviewedBy"]         # who overrode, recorded
+
+
+def test_review_page_gets_the_flagged_moments():
+    edu, app, _ = setup_educator()
+    app.items[("VIDEO#v1", "META")].update({"moderationStatus": "FLAGGED", "moderationNote": "1 moment",
+        "moderationFlags": [{"label": "Violence", "parent": "", "confidence": 88, "startMs": 5000, "endMs": 9000,
+                             "at": "00:05", "until": "00:09"}]})
+    body = json.loads(edu.handler(educator_event("educators", "GET", "/lessons/{videoId}/objectives", {"videoId": "v1"}), None)["body"])
+    assert body["moderationStatus"] == "FLAGGED" and body["moderationFlags"][0]["at"] == "00:05"
+
+
+def test_clean_lesson_publishes_without_extra_confirmation():
+    edu, app, _ = setup_educator()
+    app.items[("VIDEO#v1", "META")]["moderationStatus"] = "CLEAN"
+    res = edu.handler(educator_event("educators", "POST", "/lessons/{videoId}/publish", {"videoId": "v1"}, {"topic": "CloudFront"}), None)
+    assert res["statusCode"] == 200 and "safetyReviewedBy" not in app.items[("VIDEO#v1", "META")]
+
+
 def test_cannot_publish_twice_or_without_drafts():
     edu, _, _ = setup_educator(objectives_status="PUBLISHED")
     res = edu.handler(educator_event("educators", "POST", "/lessons/{videoId}/publish",
