@@ -210,9 +210,21 @@ def test_only_the_four_publishers_can_announce_events_and_only_on_our_bus():
 
 def test_notifier_can_only_write_user_notification_items():
     statements = load_template()["Resources"]["NotifyFunction"]["Properties"]["Policies"][0]["Statement"]
+    # a conditional statement is {"Fn::If": [condition, statement, AWS::NoValue]}: look at the statement
+    statements = [s["Fn::If"][1] if "Fn::If" in s else s for s in statements]
     write = [s for s in statements if s["Sid"] == "WriteNotificationsOnly"][0]
     assert write["Action"] == "dynamodb:PutItem"
     assert write["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"] == ["USER#*"]
+
+
+def test_educator_email_is_optional_and_only_from_the_streamdojo_sender():
+    resources = load_template()["Resources"]
+    assert resources["EducatorEmailIdentity"]["Condition"] == "HasEducatorEmail"     # no sender = no SES at all
+    (conditional,) = [s for s in resources["NotifyFunction"]["Properties"]["Policies"][0]["Statement"] if "Fn::If" in s]
+    condition, send, otherwise = conditional["Fn::If"]
+    assert condition == "HasEducatorEmail" and otherwise == {"Ref": "AWS::NoValue"}
+    assert send["Action"] == "ses:SendEmail"
+    assert send["Condition"]["StringEquals"]["ses:FromAddress"] == {"Ref": "EducatorEmailFrom"}
 
 
 def test_safety_check_permissions_are_narrow():

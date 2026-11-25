@@ -126,3 +126,66 @@ def test_bell_counts_unread_and_marks_them_read():
     assert body["unread"] == 2 and body["notifications"][0]["message"] == "m2"       # newest first
     assert json.loads(m.handler(bell_event("POST", "/notifications/read"), None)["body"])["marked"] == 2
     assert json.loads(m.handler(bell_event("GET", "/notifications"), None)["body"])["unread"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Educator emails (Amazon SES)
+# ---------------------------------------------------------------------------
+class FakeCognitoWithEmail:
+    def list_users_in_group(self, **kwargs):
+        return {"Users": [
+            {"Attributes": [{"Name": "sub", "Value": "edu1"}, {"Name": "email", "Value": "edu1@school.test"}], "Enabled": True},
+            {"Attributes": [{"Name": "sub", "Value": "edu2"}], "Enabled": True}]}            # no email on file
+
+
+class FakeSes:
+    def __init__(self, fail=False):
+        self.sent, self.fail = [], fail
+
+    def send_email(self, **kwargs):
+        if self.fail:
+            raise RuntimeError("MessageRejected: Email address is not verified")
+        self.sent.append(kwargs)
+
+
+def emailer(fail=False):
+    m = load("notify")
+    m.EMAIL_FROM, m.SITE_URL = "dojo@streamdojo.test", "https://d123.cloudfront.net"
+    m._clients = {"table": FakeTable(), "cognito-idp": FakeCognitoWithEmail(), "sesv2": FakeSes(fail)}
+    return m
+
+
+def test_draft_ready_emails_each_educator_with_a_link_and_escaped_title():
+    m = emailer()
+    result = m.handler(event("LessonDraftReady", {"videoId": "v1", "title": "<b>OAC</b>", "objectiveCount": 3,
+                                                  "moderationStatus": "FLAGGED", "flagCount": 2}), None)
+    assert result == {"written": 2, "emailed": 1}                       # edu2 has no address: bell only
+    (mail,) = m._clients["sesv2"].sent
+    assert mail["Destination"] == {"ToAddresses": ["edu1@school.test"]}  # one email each, nobody sees others
+    assert mail["FromEmailAddress"] == "StreamDojo <dojo@streamdojo.test>"
+    content = mail["Content"]["Simple"]
+    assert content["Subject"]["Data"].startswith("⚠ Check before publishing")
+    assert "https://d123.cloudfront.net/#/teach/review/v1" in content["Body"]["Text"]["Data"]
+    assert "<b>OAC</b>" not in content["Body"]["Html"]["Data"] and "&lt;b&gt;OAC&lt;/b&gt;" in content["Body"]["Html"]["Data"]
+
+
+def test_a_duplicate_delivery_never_sends_a_second_email():
+    m = emailer()
+    m.handler(event("LessonDraftReady", {"videoId": "v1", "title": "AWS"}), None)
+    m.handler(event("LessonDraftReady", {"videoId": "v1", "title": "AWS"}), None)      # same event id again
+    assert len(m._clients["sesv2"].sent) == 1
+
+
+def test_only_review_events_are_emailed_and_email_is_off_without_a_sender():
+    m = emailer()
+    m.handler(event("PracticeCompleted", {"videoId": "v1", "title": "AWS", "learnerName": "Sam"}), None)
+    assert m._clients["sesv2"].sent == []                                # bell only: no inbox flooding
+    m.EMAIL_FROM = ""
+    m.handler(event("LessonDraftReady", {"videoId": "v2", "title": "S3"}, event_id="e2"), None)
+    assert m._clients["sesv2"].sent == []
+
+
+def test_a_failed_email_still_leaves_the_bell_notification():
+    m = emailer(fail=True)
+    result = m.handler(event("LessonDraftReady", {"videoId": "v1", "title": "AWS"}), None)
+    assert result == {"written": 2, "emailed": 0}

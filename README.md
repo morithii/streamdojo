@@ -43,3 +43,14 @@ _To do: what this version deliberately doesn't do yet._
 
 ## How to deploy
 _To do: prerequisites, deploy and tear-down commands._
+
+### Educator emails (optional, Amazon SES)
+Educators always get a bell notification when a lesson is ready for review. To also email them:
+
+1. Add the GitHub secret `EDUCATOR_EMAIL_FROM` with the sender address (e.g. an address you own).
+2. Deploy. SES emails that address a verification link: click it once.
+3. While the AWS account is in the **SES sandbox**, SES only delivers to verified addresses, so verify
+   each educator's address too (SES console → Identities → Create identity → Email address), or request
+   production access (SES console → Account dashboard → Request production access).
+
+No secret = no emails; everything else works the same.

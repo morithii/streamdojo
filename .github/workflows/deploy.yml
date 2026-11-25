@@ -66,7 +66,7 @@ jobs:
           --no-confirm-changeset
           --no-fail-on-empty-changeset
           --role-arn ${{ secrets.AWS_CFN_EXEC_ROLE_ARN }}
-          --parameter-overrides "Environment=dev AlertEmail=${{ secrets.ALERT_EMAIL }}"
+          --parameter-overrides "Environment=dev AlertEmail=${{ secrets.ALERT_EMAIL }} EducatorEmailFrom=${{ secrets.EDUCATOR_EMAIL_FROM }}"
 
       - name: Publish website
         # Read the stack outputs, write web/config.json (sign-in settings, no secrets),

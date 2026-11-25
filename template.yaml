@@ -35,6 +35,10 @@ Parameters:
     Type: String
     Default: ""
     Description: Email address for alarm and budget alerts (leave empty to skip the subscription)
+  EducatorEmailFrom:
+    Type: String
+    Default: ""
+    Description: Sender address for educator emails ("ready for review"). SES sends it a verification link. Empty = no emails.
   FrontendUrl:
     Type: String
     Default: http://localhost:8080
@@ -53,6 +57,7 @@ Parameters:
 # -----------------------------------------------------------------------------
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+  HasEducatorEmail: !Not [!Equals [!Ref EducatorEmailFrom, ""]]
   IsDev: !Equals [!Ref Environment, dev]
 
 # -----------------------------------------------------------------------------
@@ -1247,9 +1252,21 @@ Resources:
         Variables:
           TABLE_NAME: !Ref AppTable
           USER_POOL_ID: !Ref UserPool
+          EMAIL_FROM: !If [HasEducatorEmail, !Ref EducatorEmailFrom, ""]     # empty = bell only, no emails
+          SITE_URL: !Sub https://${SiteDistribution.DomainName}                # links in the emails
       Policies:
         - Version: "2012-10-17"
           Statement:
+            - !If
+              - HasEducatorEmail
+              - Sid: SendEducatorEmails     # only from the one verified StreamDojo sender address
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+                Condition:
+                  StringEquals:
+                    ses:FromAddress: !Ref EducatorEmailFrom
+              - !Ref AWS::NoValue
             - Sid: WriteNotificationsOnly
               Effect: Allow
               Action: dynamodb:PutItem
@@ -1274,6 +1291,15 @@ Resources:
               MaximumEventAgeInSeconds: 3600
             DeadLetterConfig:
               Type: SQS                   # notifications that still fail land here, never lost silently
+
+  # Educator emails: the sender address must be verified in SES before anything is sent.
+  # Creating this identity makes SES email that address a verification link - click it once.
+  # While the account is in the SES sandbox, every RECIPIENT must be verified too (see README).
+  EducatorEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Condition: HasEducatorEmail
+    Properties:
+      EmailIdentity: !Ref EducatorEmailFrom
 
   # Deleting a video: removes its data, learner records, files and cached copies (LessonDeleted)
   CleanupFunction:
