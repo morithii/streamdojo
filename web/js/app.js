@@ -17,6 +17,7 @@ import { renderTeach, renderReview, renderInsights } from "./teach.js";
 import { renderCreate } from "./create.js";
 import { renderHome, renderCourse, loadCourses, curriculum, progressBar, watchHref } from "./courses.js";
 import { bell } from "./bell.js";
+import { dojoChip } from "./dojo.js";
 
 const app = document.getElementById("app");
 const account = document.getElementById("account");
@@ -40,6 +41,7 @@ function renderAccount() {
     user.groups.includes("creators") ? link("create", "#/create", "Creator") : "",
     user.groups.includes("educators") ? link("teach", "#/teach", "Educator") : "",
     link("learn", "#/", "Learner"),
+    dojoChip(),
     bell(),
     el("button", { className: "btn ghost", onclick: signOut }, "Sign out"),
   );

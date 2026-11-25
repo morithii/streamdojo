@@ -12,6 +12,7 @@
 import { el, parseTimestamp, whenFromNow, sensei } from "./dom.js";
 import { api } from "./api.js";
 import { attachStream, stopPlayer } from "./player.js";
+import { starRow, pointsLine, setDojoTotal } from "./dojo.js";
 
 const VERDICTS = {
   covered: { icon: "✓", label: "Recalled" },
@@ -97,8 +98,10 @@ export function runPractice(app, { queue, kind, heading, doneHref = "#/", doneLa
   }
 
   function showResult(item, answerText, result) {
+    setDojoTotal(result.totalDojoPoints);              // header total updates straight away
     const covered = result.pointResults.filter((p) => p.verdict === "covered").length;
     const total = result.pointResults.length;
+    const partly = result.pointResults.filter((p) => p.verdict === "partial").length;   // worth half a star-share
     const rewatchSpot = el("div", { className: "rewatch-player" });
 
     const schedule = result.nextReviewAt
@@ -114,7 +117,10 @@ export function runPractice(app, { queue, kind, heading, doneHref = "#/", doneLa
         el("div", { className: `score ${result.recalledAll ? "good" : ""}` },
           el("img", { src: "/img/clipsensei.svg", alt: "", className: "score-sensei" }),
           el("div", {},
-            el("strong", {}, result.recalledAll ? "You recalled every key idea." : `${covered} of ${total} key ideas recalled.`),
+            result.stars != null ? starRow(result.stars) : null,
+            el("strong", {}, result.recalledAll ? "You recalled every key idea."
+              : `${covered} of ${total} key ideas recalled${partly ? `, ${partly} partly` : ""}.`),
+            result.stars != null ? pointsLine(result) : null,
             result.feedback ? el("p", {}, result.feedback) : null,
           ),
         ),
@@ -167,12 +173,16 @@ export function runPractice(app, { queue, kind, heading, doneHref = "#/", doneLa
     const answered = firstTries.filter(Boolean);
     const full = answered.filter((r) => r.recalledAll).length;
     const noun = answered.length === 1 ? "question" : "questions";
+    const stars = answered.reduce((sum, r) => sum + (r.stars || 0), 0);
+    const points = answered.reduce((sum, r) => sum + (r.dojoPoints || 0), 0);
     app.replaceChildren(
       el("section", { className: "practice" },
         el("p", { className: "eyebrow" }, heading),
         el("h1", {}, full === answered.length
           ? `Every key idea recalled. Well done.`
           : `${full} of ${answered.length} ${noun} fully recalled on the first try.`),
+        el("p", { className: "session-score" }, el("span", { className: "star on", ariaHidden: "true" }, "★ "),
+          `${stars} of ${answered.length * 3} stars`, points ? ` · +${points} dojo points` : ""),
         el("p", { className: "meta" }, "Ideas you missed come back tomorrow; ideas you recalled come back later and later (1 → 3 → 7 → 14 → 30 days)."),
         el("a", { className: "btn", href: doneHref }, doneLabel),
       ),

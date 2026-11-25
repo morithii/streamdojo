@@ -246,6 +246,14 @@ Resources:
       Environment:
         Variables:
           ALLOWED_ORIGIN: !Ref FrontendUrl
+          TABLE_NAME: !Ref AppTable
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadOwnDojoPoints        # one GetItem on the caller's PROFILE item
+              Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt AppTable.Arn
       Events:
         GetMe:
           Type: Api

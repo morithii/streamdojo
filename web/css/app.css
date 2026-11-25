@@ -365,3 +365,20 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .delete-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 .danger-zone { margin-top: 2.5rem; padding-top: 1.2rem; border-top: 1px solid var(--line); }
 .danger-zone h2 { font-size: 1.05rem; }
+
+/* Dojo stars and points */
+.dojo-chip { display: inline-flex; align-items: center; gap: 0.1rem; padding: 0.35rem 0.7rem; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dojo-chip > span:first-child { color: #f2b84b; }
+.stars { display: flex; gap: 0.15rem; font-size: 1.6rem; line-height: 1; margin-bottom: 0.4rem; }
+.star { color: var(--line); }
+.star.on { color: #f2b84b; }                      /* gold */
+.stars .star.on { animation: star-pop 0.35s ease-out backwards; }
+.stars .star.on:nth-child(2) { animation-delay: 0.12s; }
+.stars .star.on:nth-child(3) { animation-delay: 0.24s; }
+@keyframes star-pop { from { transform: scale(0.3); opacity: 0; } 70% { transform: scale(1.2); } to { transform: scale(1); opacity: 1; } }
+.points-earned { margin: 0.2rem 0 0.4rem; color: var(--muted); }
+.points-earned strong { color: #f2b84b; }
+.session-score { font-size: 1.15rem; margin: 0.4rem 0 0.8rem; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .stars .star.on { animation: none; } }

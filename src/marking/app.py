@@ -16,6 +16,12 @@ Spaced repetition (1 -> 3 -> 7 -> 14 -> 30 days):
     even when the attempt was early.
   * A retry ("try again" straight after seeing feedback) never touches the schedule.
   * Educator recall stats are only counted on counted attempts, so they measure real recall.
+Dojo stars and points (gamification):
+  * Every answer gets 0-3 stars: 3 = every idea covered with no hint, 2 = most (a partial counts as half)
+    or all with a hint, 1 = something right, 0 = nothing / "I don't remember".
+  * Dojo points = stars x a gap multiplier, only on COUNTED attempts: remembering after a longer gap is worth
+    more (x1 first practice or 1-day review, x2 at 3/7 days, x3 at 14/30 days). Retries and early practice score 0.
+  * The learner's total is one atomic ADD on their profile item - always cheap to read.
 """
 import json
 import os
@@ -30,6 +36,7 @@ KEYS_TABLE_NAME = os.environ.get("KEYS_TABLE_NAME", "")
 MODEL_ID = os.environ.get("MODEL_ID", "")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 INTERVALS = [1, 3, 7, 14, 30]
+GAP_MULTIPLIER = {None: 1, 1: 1, 3: 2, 7: 2, 14: 3, 30: 3}     # key = the gap (days) the learner just remembered across
 MAX_ANSWER_CHARS = 2000
 
 SYSTEM_PROMPT = """You are ClipSensei, marking an answer a learner wrote from memory after a video lesson.
@@ -149,6 +156,25 @@ def check_marks(points, marks, answer):
     return results, needs_review
 
 
+def stars_for(results, used_hint, dont_remember):
+    """0-3 stars for one answer. A partial idea counts as half; 'uncertain' (evidence not found) counts as nothing."""
+    if dont_remember or not results:
+        return 0
+    share = sum(1 if r["verdict"] == "covered" else 0.5 if r["verdict"] == "partial" else 0 for r in results) / len(results)
+    if share == 1:
+        return 2 if used_hint else 3
+    if share > 0.5:
+        return 2
+    return 1 if share > 0 else 0
+
+
+def dojo_points(stars, previous_interval, counted, is_retry):
+    """Stars x how long the learner remembered. Only counted attempts score, so nobody can farm points."""
+    if is_retry or not counted:
+        return 0
+    return stars * GAP_MULTIPLIER.get(previous_interval, 3 if (previous_interval or 0) > 7 else 2)
+
+
 def next_interval(previous, recalled_all_unaided):
     """1 -> 3 -> 7 -> 14 -> 30 days on success; back to 1 on a miss, hint or 'I don't remember'."""
     if not recalled_all_unaided or previous is None:
@@ -244,9 +270,8 @@ def submit_attempt(user_id, display_name, body):
     }
     if needs_review:                                         # sparse GSI2: educator's "check this mark" queue
         attempt.update({"GSI2PK": "REVIEWQUEUE", "GSI2SK": iso(now)})
-    table(TABLE_NAME).put_item(Item=attempt)
 
-    next_review, counted, first_time = None, False, False
+    next_review, counted, first_time, previous = None, False, False, None
     if not is_retry:                                         # a retry never touches the schedule
         schedule_key = {"PK": f"VIDEO#{video_id}", "SK": f"LEARNER#{user_id}#OBJ#{objective_id}"}
         current = table(TABLE_NAME).get_item(Key=schedule_key).get("Item", {})
@@ -267,6 +292,19 @@ def submit_attempt(user_id, display_name, body):
             })
         else:
             next_review = current["nextReviewAt"]            # early and correct: keep the date it already had
+    # Dojo stars and points: saved on the attempt; the learner's total is one atomic ADD on their profile
+    stars = stars_for(results, used_hint, dont_remember)
+    earned = dojo_points(stars, previous, counted, is_retry)
+    attempt.update({"stars": stars, "dojoPoints": earned})
+    table(TABLE_NAME).put_item(Item=attempt)
+    total = None
+    if earned:
+        updated = table(TABLE_NAME).update_item(
+            Key={"PK": f"USER#{user_id}", "SK": "PROFILE"},
+            UpdateExpression="ADD dojoPoints :p SET displayName = if_not_exists(displayName, :n)",
+            ExpressionAttributeValues={":p": earned, ":n": display_name}, ReturnValues="UPDATED_NEW")
+        total = int(updated.get("Attributes", {}).get("dojoPoints", earned))
+
     if counted:
         # Recall stats for the educator, counted on write (one atomic update, no scans later)
         missed = [r["pointId"] for r in results if r["verdict"] != "covered"]
@@ -285,6 +323,8 @@ def submit_attempt(user_id, display_name, body):
         "pointResults": results, "recalledAll": recalled_all, "feedback": feedback,
         "modelAnswer": key["modelAnswer"], "rewatchAt": obj["timestamp"],
         "nextReviewAt": next_review, "needsReview": needs_review, "counted": counted,
+        "stars": stars, "dojoPoints": earned, "totalDojoPoints": total,
+        "multiplier": GAP_MULTIPLIER.get(previous, 1) if counted and not is_retry else 0,
     })
 
 

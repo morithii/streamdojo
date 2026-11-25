@@ -22,7 +22,7 @@ def me_event(groups):
 def test_me_returns_user_and_groups_without_email():
     me = load("me")
     body = json.loads(me.handler(me_event("[creators, educators]"), None)["body"])
-    assert body == {"userId": "user-123", "displayName": "Sam", "groups": ["creators", "educators"]}
+    assert body == {"userId": "user-123", "displayName": "Sam", "groups": ["creators", "educators"], "dojoPoints": 0}
     assert "email" not in body
 
 
@@ -56,3 +56,24 @@ def test_password_reset_does_not_change_groups():
     pc._client = fake
     pc.handler({"triggerSource": "PostConfirmation_ConfirmForgotPassword", "userPoolId": "p", "userName": "u"}, None)
     assert fake.calls == []
+
+
+
+def test_me_returns_the_learners_dojo_points_and_survives_a_database_error():
+    me = load("me")
+    me.TABLE_NAME = "app"
+
+    class Table:
+        def __init__(self, item=None, fail=False):
+            self.item, self.fail = item, fail
+
+        def get_item(self, Key, ProjectionExpression):
+            assert Key == {"PK": "USER#user-123", "SK": "PROFILE"}        # only ever the caller's own profile
+            if self.fail:
+                raise RuntimeError("throttled")
+            return {"Item": self.item} if self.item else {}
+
+    me._table = Table({"dojoPoints": 42})
+    assert json.loads(me.handler(me_event("learners"), None)["body"])["dojoPoints"] == 42
+    me._table = Table(fail=True)
+    assert json.loads(me.handler(me_event("learners"), None)["body"])["dojoPoints"] == 0   # sign-in still works

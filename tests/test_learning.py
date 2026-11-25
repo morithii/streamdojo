@@ -27,6 +27,11 @@ class FakeTable:
 
     def update_item(self, **kwargs):
         self.updates.append(kwargs)
+        # like DynamoDB: ADD on the learner's profile keeps a running dojo-points total
+        if kwargs["UpdateExpression"].startswith("ADD dojoPoints"):
+            self.dojo = getattr(self, "dojo", 0) + kwargs["ExpressionAttributeValues"][":p"]
+            return {"Attributes": {"dojoPoints": self.dojo}}
+        return {}
 
     def query(self, **kwargs):
         return {"Items": [dict(i) for i in self.items.values()]}
@@ -160,8 +165,8 @@ def test_first_practice_is_counted_in_the_educator_stats():
     m = setup_marking(FULL)
     body = json.loads(m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER}), None)["body"])
     assert body["counted"] is True
-    update = m._clients["table:app"].updates[0]
-    assert update["Key"]["SK"] == "STATS#obj1" and update["ExpressionAttributeValues"][":full"] == 1
+    update = next(u for u in m._clients["table:app"].updates if u["Key"]["SK"] == "STATS#obj1")
+    assert update["ExpressionAttributeValues"][":full"] == 1
 
 
 def test_progress_counts_practised_ideas_per_lesson():
@@ -202,3 +207,65 @@ def test_practising_the_last_idea_announces_the_lesson_completed():
     assert (detail["recalled"], detail["total"]) == (1, 1)
     m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER, "retry": True}), None)
     assert len(m._clients["events"].sent) == 1                                          # retries never re-announce
+
+
+
+# ---------------------------------------------------------------------------
+# Dojo stars and points
+# ---------------------------------------------------------------------------
+HALF = {"points": [{"pointId": "p1", "verdict": "covered", "evidence": "The bucket stays private", "confidence": "high"},
+                   {"pointId": "p2", "verdict": "partial", "evidence": "CloudFront signs every request", "confidence": "high"}],
+        "feedback": "Nearly."}
+
+
+def due_schedule(interval_days):
+    """A review that is due now, after the learner last remembered across `interval_days`."""
+    return {"PK": "VIDEO#v1", "SK": "LEARNER#u1#OBJ#obj1", "intervalDays": interval_days, "nextReviewAt": "2000-01-01T00:00:00Z"}
+
+
+def submit(m, **extra):
+    return json.loads(m.handler(attempt_event({"videoId": "v1", "objectiveId": "obj1", "answer": ANSWER, **extra}), None)["body"])
+
+
+def test_stars_follow_how_much_was_recalled():
+    m = load("marking")
+    covered, partial, missing = ({"verdict": v} for v in ("covered", "partial", "missing"))
+    assert m.stars_for([covered, covered], used_hint=False, dont_remember=False) == 3
+    assert m.stars_for([covered, covered], used_hint=True, dont_remember=False) == 2        # a hint caps it at 2
+    assert m.stars_for([covered, covered, partial], False, False) == 2                       # most (partial = half)
+    assert m.stars_for([covered, missing], False, False) == 1                                # exactly half: some
+    assert m.stars_for([missing, missing], False, False) == 0
+    assert m.stars_for([covered, covered], False, dont_remember=True) == 0
+
+
+def test_first_practice_earns_stars_times_one_and_adds_to_the_total():
+    m = setup_marking(FULL)
+    body = submit(m)
+    assert (body["stars"], body["dojoPoints"], body["totalDojoPoints"], body["multiplier"]) == (3, 3, 3, 1)
+    profile = next(u for u in m._clients["table:app"].updates if u["Key"]["SK"] == "PROFILE")
+    assert profile["Key"]["PK"] == "USER#u1" and profile["UpdateExpression"].startswith("ADD dojoPoints")
+
+
+def test_remembering_after_a_longer_gap_is_worth_more():
+    for gap, expected in ((1, 3), (3, 6), (7, 6), (14, 9), (30, 9)):
+        body = submit(setup_marking(FULL, schedule=due_schedule(gap)), kind="REVIEW")
+        assert body["dojoPoints"] == expected, gap
+    body = submit(setup_marking(HALF, schedule=due_schedule(14)), kind="REVIEW")
+    assert (body["stars"], body["dojoPoints"]) == (2, 6)                                     # 2 stars x 3
+
+
+def test_retries_and_early_practice_never_score():
+    m = setup_marking(FULL, schedule=due_schedule(7))
+    retry = submit(m, retry=True)
+    assert retry["stars"] == 3 and retry["dojoPoints"] == 0 and retry["totalDojoPoints"] is None
+    early = {"PK": "VIDEO#v1", "SK": "LEARNER#u1#OBJ#obj1", "intervalDays": 7, "nextReviewAt": "2999-01-01T00:00:00Z"}
+    body = submit(setup_marking(FULL, schedule=early))
+    assert body["counted"] is False and body["dojoPoints"] == 0
+    assert not any(u["Key"]["SK"] == "PROFILE" for u in m._clients["table:app"].updates)
+
+
+def test_the_attempt_records_its_stars_and_points():
+    m = setup_marking(FULL)
+    submit(m)
+    attempt = next(i for (pk, sk), i in m._clients["table:app"].items.items() if sk.startswith("ATTEMPT#"))
+    assert attempt["stars"] == 3 and attempt["dojoPoints"] == 3
