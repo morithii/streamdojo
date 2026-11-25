@@ -20,6 +20,7 @@ Data (single table)
   USER#learner / GRADING#topicId#startedAt   the exam: questions, marked answers, score, verdict
   USER#learner / BELT#topicId                current belt + when they last graded
   TOPIC#topicId / BELTSTATS                  how many learners hold each belt (educator insights, atomic ADDs)
+  TOPIC#topicId / POINTS#sub                 the learner's leaderboard row: belt, last grading, last active
 """
 import json
 import random
@@ -253,6 +254,15 @@ class Grading:
             values[":b"] = target
         self.m.table(self.m.TABLE_NAME).update_item(Key={"PK": f"USER#{user_id}", "SK": f"BELT#{topic_id}"},
                                                     UpdateExpression=belt_update, ExpressionAttributeValues=values)
+        # Educator leaderboard row for this learner and course: belt, last grading, last active
+        board_update = "SET learnerSub = :u, learnerName = :n, lastActiveAt = :at, lastGrading = :g ADD gradings :one"
+        board_values = {":u": user_id, ":n": session.get("learnerName") or "Learner", ":at": finished, ":one": 1,
+                        ":g": {"score": score, "passed": passed, "targetBelt": target, "at": finished}}
+        if passed:
+            board_update = board_update.replace("lastGrading = :g", "lastGrading = :g, belt = :b")
+            board_values[":b"] = target
+        self.m.table(self.m.TABLE_NAME).update_item(Key={"PK": f"TOPIC#{topic_id}", "SK": f"POINTS#{user_id}"},
+                                                    UpdateExpression=board_update, ExpressionAttributeValues=board_values)
         if passed:
             # educator insights: how many learners hold each belt in this module (one atomic update, no scans)
             counts, names = ", ".join(["#new :one"] + (["#old :minus"] if session["fromBelt"] != "WHITE" else [])), {"#new": target}

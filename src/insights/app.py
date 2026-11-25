@@ -2,6 +2,7 @@
 
 GET /insights/lessons/{videoId}                 numbers + a short ClipSensei summary for the educator
 GET /insights/lessons/{videoId}?summary=false   numbers only (no Bedrock call)
+GET /insights/leaderboard/{topicId}             the class for one course, ranked by dojo points
 
 Educators only. Everything comes from ONE DynamoDB query on the lesson's partition:
   STATS#{objectiveId}                 counters the marking function adds to on every counted attempt
@@ -14,7 +15,7 @@ Privacy: ClipSensei only ever sees the aggregated numbers - never learner names 
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -24,6 +25,12 @@ KEYS_TABLE_NAME = os.environ.get("KEYS_TABLE_NAME", "")
 MODEL_ID = os.environ.get("MODEL_ID", "")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 THIN_EVIDENCE = 5                 # under this many counted attempts, percentages can mislead
+# Same rules as the gradings (src/marking/grading.py) so "Ready to grade" here matches what the learner sees
+BELTS = ["WHITE", "YELLOW", "ORANGE", "GREEN", "BLUE", "BROWN", "BLACK"]
+REMEMBERED_AFTER_DAYS = 3         # an idea counts as remembered once its review gap has reached this
+COOLDOWN_DAYS = 3                 # days between gradings
+INACTIVE_DAYS = 7                 # "falling behind": nothing done for this long...
+OVERDUE_GRACE_DAYS = 1            # ...or a review left undone for more than a day
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -169,6 +176,93 @@ def lesson_insights(video_id, with_summary):
     })
 
 
+# ---------------------------------------------------------------------------
+# Leaderboard: GET /insights/leaderboard/{topicId}
+# ---------------------------------------------------------------------------
+def query_partition(pk):
+    """Every item under one partition key, following DynamoDB's 1 MB pages."""
+    items, kwargs = [], {"KeyConditionExpression": Key("PK").eq(pk)}
+    while True:
+        page = table(TABLE_NAME).query(**kwargs)
+        items.extend(page.get("Items", []))
+        if "LastEvaluatedKey" not in page:
+            return items
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def iso(moment):
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse(value):
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+def leaderboard(topic_id, current=None):
+    """The whole class for one course, from 1 + (number of lessons) queries - no scans:
+      TOPIC#<course>   META (name), LESSON# links, POINTS#<learner> (points, belt, last grading, last active)
+      VIDEO#<lesson>   META (is it published?), OBJ# (the ideas), LEARNER#<sub>#OBJ# (each learner's review schedule)
+    """
+    current = current or datetime.now(timezone.utc)
+    stamp = iso(current)
+    course = query_partition(f"TOPIC#{topic_id}")
+    if not any(i["SK"].startswith("LESSON#") for i in course):
+        return response(404, {"message": "Course not found"})
+    meta = next((i for i in course if i["SK"] == "META"), {})
+    rows = {i["SK"].split("#", 1)[1]: i for i in course if i["SK"].startswith("POINTS#")}
+
+    ideas, schedules = 0, []
+    for link in (i for i in course if i["SK"].startswith("LESSON#")):
+        lesson = query_partition(f"VIDEO#{link['SK'].split('#', 1)[1]}")
+        lesson_meta = next((i for i in lesson if i["SK"] == "META"), {})
+        if lesson_meta.get("objectivesStatus") != "PUBLISHED" or lesson_meta.get("processingStatus") == "DELETED":
+            continue                                   # drafts and deleted lessons don't count towards the course
+        ideas += sum(1 for i in lesson if i["SK"].startswith("OBJ#"))
+        schedules += [i for i in lesson if i["SK"].startswith("LEARNER#")]
+
+    learners = {}
+    def learner(sub, name):
+        row = rows.get(sub, {})
+        return learners.setdefault(sub, {
+            "learnerSub": sub, "displayName": row.get("learnerName") or name or "Learner",
+            "dojoPoints": int(row.get("dojoPoints", 0)), "belt": row.get("belt", "WHITE"),
+            "lastActiveAt": row.get("lastActiveAt"), "lastGrading": row.get("lastGrading"),
+            "gradings": int(row.get("gradings", 0)),
+            "practised": 0, "remembered": 0, "dueReviews": 0, "overdueReviews": 0})
+    for sub, row in rows.items():
+        learner(sub, row.get("learnerName"))
+    overdue_before = iso(current - timedelta(days=OVERDUE_GRACE_DAYS))
+    for item in schedules:
+        entry = learner(item.get("learnerSub") or item["SK"].split("#")[1], item.get("displayName"))
+        entry["practised"] += 1
+        entry["remembered"] += int(int(item.get("intervalDays", 0)) >= REMEMBERED_AFTER_DAYS)
+        entry["dueReviews"] += int(item.get("nextReviewAt", "9999") <= stamp)
+        entry["overdueReviews"] += int(item.get("nextReviewAt", "9999") < overdue_before)
+
+    inactive_before = iso(current - timedelta(days=INACTIVE_DAYS))
+    for entry in learners.values():
+        last = entry["lastGrading"] or {}
+        cooling = bool(last.get("at")) and iso(parse(last["at"]) + timedelta(days=COOLDOWN_DAYS)) > stamp
+        entry["ideas"] = ideas
+        entry["readyToGrade"] = (entry["belt"] != "BLACK" and ideas > 0 and entry["practised"] >= ideas
+                                 and entry["remembered"] >= ideas and not cooling)
+        entry["fallingBehind"] = entry["overdueReviews"] > 0 or not entry["lastActiveAt"] or entry["lastActiveAt"] < inactive_before
+        entry["failedLastGrading"] = bool(last) and not last.get("passed")
+
+    ranked = sorted(learners.values(), key=lambda l: (-l["dojoPoints"], -BELTS.index(l["belt"]), l["displayName"].lower()))
+    for position, entry in enumerate(ranked, start=1):
+        entry["rank"] = position
+    return response(200, {
+        "topicId": topic_id, "topicName": meta.get("name") or topic_id, "ideas": ideas, "generatedAt": stamp,
+        # counted from the rows (includes White); BELTSTATS keeps the running totals for a future analytics page
+        "beltCounts": {belt: sum(1 for l in ranked if l["belt"] == belt) for belt in BELTS},
+        "learners": ranked,
+        "counts": {"learners": len(ranked), "readyToGrade": sum(l["readyToGrade"] for l in ranked),
+                   "fallingBehind": sum(l["fallingBehind"] for l in ranked),
+                   "failedLastGrading": sum(l["failedLastGrading"] for l in ranked)},
+    })
+
+
 def handler(event, context):
     _, groups = caller(event)
     if "educators" not in groups:
@@ -177,4 +271,6 @@ def handler(event, context):
     query = event.get("queryStringParameters") or {}
     if route == "GET /insights/lessons/{videoId}":
         return lesson_insights(params["videoId"], with_summary=query.get("summary") != "false")
+    if route == "GET /insights/leaderboard/{topicId}":
+        return leaderboard(params["topicId"])
     return response(404, {"message": "Unknown route"})

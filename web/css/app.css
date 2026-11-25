@@ -425,3 +425,35 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .grading .score { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1.2rem; }
 .grading .score p { margin: 0; }
 .grading .sensei + h2 { margin-top: 2rem; }
+
+/* ---------------------------------------------------------------------------
+   Educator leaderboard (leaderboard.js)
+   --------------------------------------------------------------------------- */
+.teach-head h1 + .btn { margin-top: 0.6rem; }
+.board-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem 2rem; margin: 1rem 0; color: var(--muted); }
+.board-controls .toggle { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.belt-strip { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 1rem 0; }
+.belt-count { display: flex; align-items: center; gap: 0.7rem; background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 0.5rem 0.8rem; }
+.belt-count strong { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.belt-count.zero { opacity: 0.55; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.2rem 0 0.8rem; }
+.chip { font: inherit; font-weight: 600; color: var(--text); background: transparent; border: 1px solid var(--line);
+  border-radius: 999px; padding: 0.35rem 0.9rem; cursor: pointer; }
+.chip .count { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 0.2rem; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.chip.on .count { color: var(--on-accent); }
+.chip:focus-visible, .sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.board-wrap { overflow-x: auto; }                       /* the table scrolls sideways on phones */
+.board { width: 100%; border-collapse: collapse; min-width: 44rem; }
+.board th { text-align: left; border-bottom: 1px solid var(--line); padding: 0; }
+.board .sort { font: inherit; font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); background: none; border: 0; padding: 0.6rem 0.7rem; cursor: pointer; white-space: nowrap; }
+.board th[aria-sort="descending"] .sort { color: var(--accent); }
+.board td { padding: 0.7rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.board tbody tr:hover { background: var(--panel); }
+.board .rank { font-weight: 800; color: var(--muted); width: 2.5rem; }
+.board .num { font-variant-numeric: tabular-nums; }
+.board .warn { color: var(--partial); font-weight: 700; }
+.board .tag { display: inline-block; margin-left: 0.5rem; font-size: 0.75rem; font-weight: 600; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.5rem; }

@@ -308,6 +308,13 @@ def submit_attempt(user_id, display_name, body):
             UpdateExpression="ADD dojoPoints :p SET displayName = if_not_exists(displayName, :n)",
             ExpressionAttributeValues={":p": earned, ":n": display_name}, ReturnValues="UPDATED_NEW")
         total = int(updated.get("Attributes", {}).get("dojoPoints", earned))
+    if lesson.get("topicId"):
+        # Educator leaderboard: one item per learner per course, so the whole class is ONE Query on TOPIC#<course>.
+        # Every attempt updates lastActiveAt; points are added only when some were earned (ADD 0 changes nothing).
+        table(TABLE_NAME).update_item(
+            Key={"PK": f"TOPIC#{lesson['topicId']}", "SK": f"POINTS#{user_id}"},
+            UpdateExpression="ADD dojoPoints :p SET learnerSub = :u, learnerName = :n, lastActiveAt = :at",
+            ExpressionAttributeValues={":p": earned, ":u": user_id, ":n": display_name, ":at": iso(now)})
 
     if counted:
         # Recall stats for the educator, counted on write (one atomic update, no scans later)

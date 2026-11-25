@@ -4,6 +4,7 @@
 //   #/teach                    drafts waiting for review + published lessons
 //   #/teach/review/<id>        WATCH the lesson, edit ClipSensei's objectives, publish or reject
 //   #/teach/insights/<id>      what's sticking, what isn't, who needs help (+ ClipSensei's note)
+//   #/teach/leaderboard/<topic> the class for one course, ranked by dojo points (see leaderboard.js)
 //
 // The educator sees the answer keys here; learners never can (separate table, separate IAM).
 // =============================================================================
@@ -29,6 +30,7 @@ export async function renderTeach(app) {
         el("div", {},
           el("p", { className: "eyebrow" }, "Educator"),
           el("h1", {}, "Your dojo"),
+          el("a", { className: "btn ghost", href: "#/teach/leaderboard" }, "🏆 Leaderboard"),
         ),
         sensei(drafts.length
           ? `${drafts.length} lesson${drafts.length === 1 ? "" : "s"} waiting for your review. I drafted the questions - you have the final say.`

@@ -59,8 +59,8 @@ class FakeTable:
                         node = node.get(part) if isinstance(node, dict) else None
                     if node is not None:
                         raise RuntimeError("ConditionalCheckFailedException")
-        action, rest = UpdateExpression.split(" ", 1)
-        for assignment in rest.split(", "):
+        clauses = re.findall(r"(SET|ADD) (.*?)(?= (?:SET|ADD) |$)", UpdateExpression)   # "SET a = :x ADD b :y"
+        for action, assignment in ((a, part) for a, rest in clauses for part in rest.split(", ")):
             if action == "SET":
                 target, value = assignment.split(" = ")
                 *parents, leaf = path(target)
@@ -169,6 +169,8 @@ def test_pass_awards_the_next_belt_with_a_sensei_verdict_and_an_event():
     app = m._clients["table:app"].items
     assert app[("USER#u1", "BELT#cloud")]["belt"] == "YELLOW"
     assert app[("TOPIC#cloud", "BELTSTATS")]["YELLOW"] == 1
+    row = app[("TOPIC#cloud", "POINTS#u1")]                                               # educator leaderboard row
+    assert row["belt"] == "YELLOW" and row["gradings"] == 1 and row["lastGrading"]["passed"] is True
     (event,) = m._clients["events"].sent
     assert event["DetailType"] == "BeltAwarded" and json.loads(event["Detail"])["belt"] == "YELLOW"
 
@@ -183,6 +185,8 @@ def test_a_failed_grading_keeps_the_belt_and_starts_the_three_day_wait():
     body = call(m, "GET", "")[1]
     assert body["belt"] == "WHITE" and body["canStart"] is False and body["nextGradingAt"].startswith("2026-11-28")
     assert body["lastResult"]["score"] == 0
+    row = m._clients["table:app"].items[("TOPIC#cloud", "POINTS#u1")]
+    assert "belt" not in row and row["lastGrading"]["passed"] is False                     # "failed last grading"
     assert call(m, "POST", "/start")[0] == 409
 
 

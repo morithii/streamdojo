@@ -16,6 +16,7 @@ import { lessonPlayer, stopPlayer } from "./player.js";
 import { runPractice } from "./practice.js";
 import { renderGrading } from "./grading.js";
 import { renderTeach, renderReview, renderInsights } from "./teach.js";
+import { renderLeaderboard } from "./leaderboard.js";
 import { renderCreate } from "./create.js";
 import { renderHome, renderCourse, loadCourses, curriculum, progressBar, watchHref } from "./courses.js";
 import { bell } from "./bell.js";
@@ -157,6 +158,7 @@ async function route() {
     if (page === "grading" && id) return await renderGrading(app, decodeURIComponent(id));
     if (page === "reviews") return await renderReviews();
     if (page === "teach" && id === "review" && sub) return await renderReview(app, decodeURIComponent(sub));
+    if (page === "teach" && id === "leaderboard") return await renderLeaderboard(app, sub && decodeURIComponent(sub));
     if (page === "teach" && id === "insights" && sub) return await renderInsights(app, decodeURIComponent(sub));
     if (page === "teach") return await renderTeach(app);
     if (page === "create") return await renderCreate(app, currentUser());

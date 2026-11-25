@@ -28,7 +28,7 @@ class FakeTable:
     def update_item(self, **kwargs):
         self.updates.append(kwargs)
         # like DynamoDB: ADD on the learner's profile keeps a running dojo-points total
-        if kwargs["UpdateExpression"].startswith("ADD dojoPoints"):
+        if kwargs["Key"]["SK"] == "PROFILE":
             self.dojo = getattr(self, "dojo", 0) + kwargs["ExpressionAttributeValues"][":p"]
             return {"Attributes": {"dojoPoints": self.dojo}}
         return {}
@@ -150,7 +150,10 @@ def test_early_correct_practice_cannot_fast_forward_the_schedule():
     saved = m._clients["table:app"].items[("VIDEO#v1", "LEARNER#u1#OBJ#obj1")]
     assert saved["intervalDays"] == 1 and saved["nextReviewAt"] == FUTURE       # unchanged: no cramming
     assert body["counted"] is False and body["nextReviewAt"] == FUTURE
-    assert m._clients["table:app"].updates == []                                # stats not counted
+    updates = m._clients["table:app"].updates
+    assert [u for u in updates if u["Key"]["SK"].startswith("STATS#")] == []           # stats not counted
+    (board,) = [u for u in updates if u["Key"]["SK"] == "POINTS#u1"]                # still shows as active today...
+    assert board["Key"]["PK"] == "TOPIC#cdn" and board["ExpressionAttributeValues"][":p"] == 0   # ...with no points
 
 
 def test_early_forgetting_still_resets_to_one_day():
@@ -246,6 +249,8 @@ def test_first_practice_earns_stars_times_one_and_adds_to_the_total():
     assert (body["stars"], body["dojoPoints"], body["totalDojoPoints"], body["multiplier"]) == (3, 3, 3, 1)
     profile = next(u for u in m._clients["table:app"].updates if u["Key"]["SK"] == "PROFILE")
     assert profile["Key"]["PK"] == "USER#u1" and profile["UpdateExpression"].startswith("ADD dojoPoints")
+    board = next(u for u in m._clients["table:app"].updates if u["Key"]["SK"] == "POINTS#u1")   # educator leaderboard row
+    assert board["Key"]["PK"] == "TOPIC#cdn" and board["ExpressionAttributeValues"][":p"] == 3
 
 
 def test_remembering_after_a_longer_gap_is_worth_more():

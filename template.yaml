@@ -1050,6 +1050,12 @@ Resources:
             RestApiId: !Ref StreamDojoApi
             Path: /insights/lessons/{videoId}
             Method: get
+        Leaderboard:                               # educators only (checked in the function): the class for one course
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /insights/leaderboard/{topicId}
+            Method: get
 
   # ===========================================================================
   # Step 15: website hosting - ONE CloudFront address serves everything:
