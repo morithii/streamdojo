@@ -86,7 +86,8 @@ def main():
     parser.add_argument("--write", action="store_true", help="actually write (default: dry run)")
     args = parser.parse_args()
 
-    table = boto3.Session(profile_name=args.profile, region_name=args.region)   # profile None -> environment variables.resource("dynamodb").Table(args.table)
+    session = boto3.Session(profile_name=args.profile, region_name=args.region)   # profile None -> AWS_* environment variables
+    table = session.resource("dynamodb").Table(args.table)
     rows = build_rows(scan_user_items(table))
     for (course, sub), row in sorted(rows.items()):
         print(f"{course:20} {row.get('learnerName') or sub:20} {row['dojoPoints']:>5} pts  "
