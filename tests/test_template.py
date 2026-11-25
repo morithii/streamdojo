@@ -222,3 +222,12 @@ def test_safety_check_permissions_are_narrow():
     moderation = {s["Sid"]: s for s in resources["ModerationFunction"]["Properties"]["Policies"][0]["Statement"]}
     assert moderation["RecordSafetyCheck"]["Action"] == "dynamodb:UpdateItem"                # can't read or delete lessons
     assert moderation["ReadSafetyCheckResults"]["Action"] == "rekognition:GetContentModeration"
+
+
+def test_transcode_progress_listens_only_to_streamdojo_status_updates():
+    fn = load_template()["Resources"]["TranscodeProgressFunction"]["Properties"]
+    pattern = fn["Events"]["TranscodeProgress"]["Properties"]["Pattern"]
+    assert pattern["source"] == ["aws.mediaconvert"] and pattern["detail"]["status"] == ["STATUS_UPDATE"]
+    assert pattern["detail"]["userMetadata"]["videoId"] == [{"exists": True}]
+    (statement,) = fn["Policies"][0]["Statement"]
+    assert statement["Action"] == "dynamodb:UpdateItem"                     # write-only, one table

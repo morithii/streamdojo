@@ -133,13 +133,18 @@ def list_videos(user_id):
         Limit=50,
     )
     fields = ["videoId", "title", "createdAt", "processingStartedAt", "processingStatus", "captionStatus", "objectivesStatus",
-              "rejectionReason"]
+              "rejectionReason",
+              # exact progress for the creator's tracker: which stage is running, and when each one started
+              "stage", "processedAt", "translatingAt", "safetyCheckAt", "draftingAt", "draftReadyAt",
+              "transcodePhase", "moderationStatus"]
     videos = []
     for item in result.get("Items", []):
         video = {f: item.get(f) for f in fields}
         # For the creator's progress tracker: which subtitle languages exist so far, and how many questions
         video["subtitleLanguages"] = sorted(item.get("subtitleLanguages", set()))     # a DynamoDB set -> JSON list
         video["objectiveCount"] = int(item.get("objectiveCount", 0))                  # a Decimal -> JSON number
+        if item.get("transcodePercent") is not None:
+            video["transcodePercent"] = int(item["transcodePercent"])                   # live %, from MediaConvert events
         videos.append(video)
     return response(200, {"videos": videos})
 

@@ -58,7 +58,8 @@ def test_translates_four_languages_in_parallel():
 def test_clipsensei_runs_after_captions_and_the_safety_check_and_its_failure_is_contained():
     assert STATES["MarkCaptionsReady"]["Next"] == "WasSafetyCheckStarted"     # captions -> collect safety check
     assert STATES["MarkCaptionsPartial"]["Next"] == "WasSafetyCheckStarted"
-    assert STATES["RecordSafetyCheck"]["Next"] == "GenerateObjectives"         # -> ClipSensei drafts
+    assert STATES["RecordSafetyCheck"]["Next"] == "MarkDrafting"               # -> marker -> ClipSensei drafts
+    assert STATES["MarkDrafting"]["Next"] == "GenerateObjectives"
     assert [c["Next"] for c in STATES["GenerateObjectives"]["Catch"]] == ["MarkObjectivesFailed"]
     assert STATES["MarkObjectivesFailed"]["Next"] == "Done"
 
@@ -87,4 +88,20 @@ def test_safety_check_can_never_stop_the_lesson():
     assert STATES["IsSafetyCheckDone"]["Choices"][0]["Next"] == "WaitForSafetyCheck"
     assert STATES["WaitForSafetyCheck"]["Next"] == "CheckSafetyCheck"
     assert STATES["CheckSafetyCheck"]["Catch"][0]["Next"] == "RecordSafetyCheck"
-    assert STATES["RecordSafetyCheck"]["Catch"][0]["Next"] == "GenerateObjectives"
+    assert STATES["RecordSafetyCheck"]["Catch"][0]["Next"] == "MarkDrafting"
+
+
+def test_every_stage_is_timestamped_for_the_creators_tracker():
+    stages = {"MarkProcessing": "TRANSCODING", "MarkReady": "TRANSCRIBING", "MarkTranslating": "TRANSLATING",
+              "MarkCaptionsReady": "SAFETY_CHECK", "MarkCaptionsPartial": "SAFETY_CHECK", "MarkDrafting": "DRAFTING"}
+    for state, stage in stages.items():
+        params = STATES[state]["Parameters"]
+        assert "stage = :stage" in params["UpdateExpression"], state
+        assert params["ExpressionAttributeValues"][":stage"] == {"S": stage}, state
+    assert STATES["PrepareTranscript"]["Next"] == "MarkTranslating"
+    assert STATES["Transcode"]["Parameters"]["StatusUpdateInterval"] == "SECONDS_10"     # live % every 10 s
+
+
+def test_progress_markers_can_never_block_a_lesson():
+    for state, nxt in (("MarkTranslating", "SetLanguages"), ("MarkDrafting", "GenerateObjectives")):
+        assert STATES[state]["Catch"][0]["Next"] == nxt and STATES[state]["Next"] == nxt

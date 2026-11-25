@@ -15,31 +15,86 @@ const TYPES = { "video/mp4": "MP4", "video/quicktime": "MOV" };
 let pollTimer = null;
 
 // ---------------------------------------------------------------------------
-// Progress tracker: the pipeline writes three status fields; we turn them into five steps.
-// Each step is "done", "active", "waiting" (on a person), "todo" or "failed".
+// Progress tracker: exactly where a video is in the pipeline, and for how long.
+// The pipeline records `stage` plus the time each stage started; MediaConvert reports a live percentage
+// every 10 seconds. Each step is "done", "active", "waiting" (on a person), "todo", "skip" or "failed".
 // ---------------------------------------------------------------------------
-const LANGUAGES = 5;                       // English + French, Spanish, Italian, Greek
+const LANGUAGES = [["en", "EN"], ["fr", "FR"], ["es", "ES"], ["it", "IT"], ["el", "EL"]];
 const STALL_MINUTES = 60;                  // nothing in the pipeline should take this long
+const PHASES = { PROBING: "Reading the video", TRANSCODING: "Transcoding", UPLOADING: "Saving the files" };
 
-function steps(v) {
+// 45 -> "45s", 125 -> "2m 05s", 3720 -> "1h 02m"
+export function duration(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+}
+const between = (from, to) => (from && to ? duration((Date.parse(to) - Date.parse(from)) / 1000) : "");
+function since(from) {                     // a live "2m 05s" counter, refreshed every second below
+  if (!from) return "";
+  const node = el("span", { className: "since" }, duration((Date.now() - Date.parse(from)) / 1000));
+  node.setAttribute("data-since", from);
+  return node;
+}
+const took = (from, to) => (from && to ? ` · took ${between(from, to)}` : "");
+
+function languageChips(v) {
+  const have = new Set(v.subtitleLanguages || []);
+  return el("span", { className: "langs" }, ...LANGUAGES.map(([code, label]) =>
+    el("span", { className: `lang ${have.has(code) ? "have" : ""}`, title: have.has(code) ? `${label} ready` : `${label} in progress` },
+      have.has(code) ? `${label} ✓` : label)));
+}
+
+export function steps(v) {
   const uploaded = v.processingStatus !== "UPLOADING";
   const transcoded = v.processingStatus === "READY";
   const captionsDone = ["READY", "PARTIAL"].includes(v.captionStatus);
   const questionsDone = ["DRAFT_READY", "PUBLISHED", "REJECTED"].includes(v.objectivesStatus);
-  const languages = (v.subtitleLanguages || []).length;
-  const list = [
-    { label: "Upload", state: uploaded ? "done" : "active", detail: uploaded ? "Received" : "Waiting for the file" },
-    { label: "HD video", state: v.processingStatus === "FAILED" ? "failed" : transcoded ? "done" : uploaded ? "active" : "todo",
-      detail: transcoded ? "360p · 720p · 1080p" : uploaded ? "Transcoding…" : "" },
-    { label: "Subtitles", state: v.captionStatus === "FAILED" ? "failed" : captionsDone ? "done" : transcoded ? "active" : "todo",
-      detail: transcoded || captionsDone ? `${languages} of ${LANGUAGES} languages${v.captionStatus === "PARTIAL" ? " (some failed)" : ""}` : "" },
-    { label: "Questions", state: v.objectivesStatus === "FAILED" ? "failed" : questionsDone ? "done" : captionsDone ? "active" : "todo",
-      detail: questionsDone ? `${v.objectiveCount} drafted by ClipSensei` : captionsDone ? "ClipSensei is drafting…" : "" },
-    v.objectivesStatus === "REJECTED"
-      ? { label: "Not approved", state: "failed", detail: v.rejectionReason || "Sent back by an educator" }
-      : { label: "Published", state: v.objectivesStatus === "PUBLISHED" ? "done" : questionsDone ? "waiting" : "todo",
-          detail: v.objectivesStatus === "PUBLISHED" ? "Live for learners" : questionsDone ? "Waiting for an educator" : "" },
-  ];
+  const checked = Boolean(v.moderationStatus);
+  const safetyRunning = captionsDone && !checked && !questionsDone && v.objectivesStatus !== "FAILED" && v.stage === "SAFETY_CHECK";
+  const translating = v.stage === "TRANSLATING" || (v.subtitleLanguages || []).length > 1;
+
+  // 1. Upload
+  const upload = { label: "Upload", state: uploaded ? "done" : "active", detail: uploaded ? "Received" : ["Waiting for the file ", since(v.createdAt)] };
+
+  // 2. HD video (MediaConvert) - live percentage
+  const percent = v.transcodePercent;
+  const video = v.processingStatus === "FAILED" ? { label: "HD video", state: "failed", detail: "Transcoding failed" }
+    : transcoded ? { label: "HD video", state: "done", detail: `360p · 720p · 1080p${took(v.processingStartedAt, v.processedAt)}` }
+    : uploaded ? { label: "HD video", state: "active", percent,
+                   detail: [percent != null ? `${PHASES[v.transcodePhase] || "Transcoding"} · ${percent}% · ` : "Starting MediaConvert · ", since(v.processingStartedAt)] }
+    : { label: "HD video", state: "todo", detail: "" };
+
+  // 3. Subtitles (Transcribe, then Translate x4 in parallel)
+  const subtitles = v.captionStatus === "FAILED" ? { label: "Subtitles", state: "failed", detail: "Transcription failed" }
+    : captionsDone ? { label: "Subtitles", state: "done", detail: [languageChips(v), v.safetyCheckAt ? ` took ${between(v.processedAt, v.safetyCheckAt)}` : ""] }
+    : transcoded ? { label: "Subtitles", state: "active",
+                     detail: translating ? [languageChips(v), " Translating · ", since(v.translatingAt || v.processedAt)]
+                                         : ["Transcribing English · ", since(v.processedAt)] }
+    : { label: "Subtitles", state: "todo", detail: "" };
+
+  // 4. Safety check (Rekognition) - started at upload, collected here
+  const result = { CLEAN: "Passed", FLAGGED: "Flagged - an educator will review it", UNCHECKED: "Couldn't run - an educator will watch it" };
+  const safety = checked ? { label: "Safety check", state: v.moderationStatus === "CLEAN" ? "done" : "waiting",
+                             detail: `${result[v.moderationStatus] || v.moderationStatus}${took(v.safetyCheckAt, v.draftingAt)}` }
+    : safetyRunning ? { label: "Safety check", state: "active", detail: ["Rekognition is checking · ", since(v.safetyCheckAt)] }
+    : questionsDone || v.captionStatus === "FAILED" ? { label: "Safety check", state: "skip", detail: "Not run for this upload" }
+    : { label: "Safety check", state: "todo", detail: "" };
+
+  // 5. Questions (ClipSensei on Bedrock)
+  const questions = v.objectivesStatus === "FAILED" ? { label: "Questions", state: "failed", detail: "ClipSensei couldn't draft questions" }
+    : questionsDone ? { label: "Questions", state: "done", detail: `${v.objectiveCount} drafted by ClipSensei${took(v.draftingAt, v.draftReadyAt)}` }
+    : captionsDone && !safetyRunning ? { label: "Questions", state: "active", detail: ["ClipSensei is drafting · ", since(v.draftingAt || v.safetyCheckAt)] }
+    : { label: "Questions", state: "todo", detail: "" };
+
+  // 6. A person decides
+  const decision = v.objectivesStatus === "REJECTED"
+    ? { label: "Not approved", state: "failed", detail: v.rejectionReason || "Sent back by an educator" }
+    : { label: "Published", state: v.objectivesStatus === "PUBLISHED" ? "done" : questionsDone ? "waiting" : "todo",
+        detail: v.objectivesStatus === "PUBLISHED" ? "Live for learners" : questionsDone ? "Waiting for an educator" : "" };
+
+  const list = [upload, video, subtitles, safety, questions, decision];
   // Anything still "active" an hour after upload has stalled - say so instead of spinning forever
   const minutes = (Date.now() - Date.parse(v.createdAt)) / 60000;
   const current = list.find((step) => step.state === "active");
@@ -52,16 +107,45 @@ function steps(v) {
 
 const isBusy = (v) => steps(v).some((step) => step.state === "active");
 
+// One line above the steps: what's happening right now, and the total so far (or the total it took)
+function summary(v) {
+  const current = steps(v).find((step) => step.state === "active");
+  if (current && v.processingStartedAt) {
+    return el("p", { className: "pipeline-now", role: "status" }, el("strong", {}, `Now: ${current.label}`), " · processing for ", since(v.processingStartedAt));
+  }
+  if (v.draftReadyAt && v.processingStartedAt) {
+    return el("p", { className: "pipeline-now done" }, `Processed in ${between(v.processingStartedAt, v.draftReadyAt)}`);
+  }
+  return null;
+}
+
+function progressBar(percent) {
+  const bar = el("span", { className: "bar" }, el("span", { style: `width:${percent}%` }));
+  bar.setAttribute("role", "progressbar");
+  for (const [name, value] of [["aria-valuenow", percent], ["aria-valuemin", 0], ["aria-valuemax", 100], ["aria-label", "Transcoding progress"]]) {
+    bar.setAttribute(name, String(value));
+  }
+  return bar;
+}
+
 function tracker(v) {
-  const icon = { done: "✓", failed: "!", waiting: "…", active: "", todo: "" };
+  const icon = { done: "✓", failed: "!", waiting: "…", active: "", todo: "", skip: "–" };
   return el("ol", { className: "steps", ariaLabel: `Progress for ${v.title}` },
     ...steps(v).map((step, i) =>
       el("li", { className: `step ${step.state}` },
         el("span", { className: "dot", ariaHidden: "true" }, step.state === "active" ? "" : icon[step.state] || String(i + 1)),
         el("strong", {}, step.label),
-        el("small", {}, step.detail),
+        el("small", {}, ...[].concat(step.detail)),
+        step.state === "active" && step.percent != null ? progressBar(step.percent) : null,
       )));
 }
+
+// Live timers: every second, refresh each "since" counter on the page (no extra API calls)
+setInterval(() => {
+  for (const node of document.querySelectorAll(".since[data-since]")) {
+    node.textContent = duration((Date.now() - Date.parse(node.dataset.since)) / 1000);
+  }
+}, 1000);
 
 // S3 upload with a progress bar. XMLHttpRequest (not fetch) because only XHR reports upload progress.
 function uploadToS3(upload, file, onProgress) {
@@ -91,12 +175,13 @@ async function renderUploads(list, isEducator) {
           ? el("a", { className: "btn", href: `#/teach/review/${encodeURIComponent(v.videoId)}` }, "Review & publish")
           : null,
       ),
+      summary(v),
       tracker(v),
     )) : [el("p", { className: "meta" }, "No uploads yet.")]));
-  // Keep checking every 15 seconds while anything is still moving through the pipeline
+  // Keep checking every 5 seconds while anything is still moving through the pipeline
   clearTimeout(pollTimer);
   if (videos.some(isBusy) && location.hash.startsWith("#/create")) {
-    pollTimer = setTimeout(() => renderUploads(list, isEducator).catch(() => {}), 15000);
+    pollTimer = setTimeout(() => renderUploads(list, isEducator).catch(() => {}), 5000);
   }
 }
 

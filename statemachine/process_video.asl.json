@@ -26,7 +26,7 @@
             "S": "META"
           }
         },
-        "UpdateExpression": "SET processingStatus = :processing, processingStartedAt = :now",
+        "UpdateExpression": "SET processingStatus = :processing, processingStartedAt = :now, stage = :stage",
         "ConditionExpression": "processingStatus = :uploading",
         "ExpressionAttributeValues": {
           ":processing": {
@@ -37,6 +37,9 @@
           },
           ":now": {
             "S.$": "$$.State.EnteredTime"
+          },
+          ":stage": {
+            "S": "TRANSCODING"
           }
         }
       },
@@ -84,7 +87,7 @@
         "UserMetadata": {
           "videoId.$": "$.videoId"
         },
-        "StatusUpdateInterval": "SECONDS_60",
+        "StatusUpdateInterval": "SECONDS_10",
         "Settings": {
           "TimecodeConfig": {
             "Source": "ZEROBASED"
@@ -315,7 +318,7 @@
             "S": "META"
           }
         },
-        "UpdateExpression": "SET processingStatus = :ready, hlsPath = :hls, audioPath = :audio, thumbnailPath = :thumb, durationMs = :duration, processedAt = :now",
+        "UpdateExpression": "SET processingStatus = :ready, hlsPath = :hls, audioPath = :audio, thumbnailPath = :thumb, durationMs = :duration, processedAt = :now, stage = :stage",
         "ExpressionAttributeValues": {
           ":ready": {
             "S": "READY"
@@ -334,6 +337,9 @@
           },
           ":now": {
             "S.$": "$$.State.EnteredTime"
+          },
+          ":stage": {
+            "S": "TRANSCRIBING"
           }
         }
       },
@@ -512,7 +518,7 @@
           "Next": "MarkCaptionsFailed"
         }
       ],
-      "Next": "SetLanguages"
+      "Next": "MarkTranslating"
     },
     "SetLanguages": {
       "Type": "Pass",
@@ -597,7 +603,7 @@
             "S": "META"
           }
         },
-        "UpdateExpression": "SET captionStatus = :ready",
+        "UpdateExpression": "SET captionStatus = :ready, stage = :stage, safetyCheckAt = :now",
         "ConditionExpression": "size(subtitleLanguages) = :all",
         "ExpressionAttributeValues": {
           ":ready": {
@@ -605,6 +611,12 @@
           },
           ":all": {
             "N": "5"
+          },
+          ":stage": {
+            "S": "SAFETY_CHECK"
+          },
+          ":now": {
+            "S.$": "$$.State.EnteredTime"
           }
         }
       },
@@ -639,10 +651,16 @@
             "S": "META"
           }
         },
-        "UpdateExpression": "SET captionStatus = :partial",
+        "UpdateExpression": "SET captionStatus = :partial, stage = :stage, safetyCheckAt = :now",
         "ExpressionAttributeValues": {
           ":partial": {
             "S": "PARTIAL"
+          },
+          ":stage": {
+            "S": "SAFETY_CHECK"
+          },
+          ":now": {
+            "S.$": "$$.State.EnteredTime"
           }
         }
       },
@@ -855,6 +873,78 @@
             "States.ALL"
           ],
           "ResultPath": "$.moderationError",
+          "Next": "MarkDrafting"
+        }
+      ],
+      "Next": "MarkDrafting"
+    },
+    "MarkTranslating": {
+      "Type": "Task",
+      "Comment": "Progress marker for the creator's tracker: translation has started.",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET stage = :stage, translatingAt = :now",
+        "ExpressionAttributeValues": {
+          ":stage": {
+            "S": "TRANSLATING"
+          },
+          ":now": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.markerError",
+          "Next": "SetLanguages"
+        }
+      ],
+      "Next": "SetLanguages"
+    },
+    "MarkDrafting": {
+      "Type": "Task",
+      "Comment": "Progress marker for the creator's tracker: ClipSensei has started drafting.",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${AppTableName}",
+        "Key": {
+          "PK": {
+            "S.$": "States.Format('VIDEO#{}', $.videoId)"
+          },
+          "SK": {
+            "S": "META"
+          }
+        },
+        "UpdateExpression": "SET stage = :stage, draftingAt = :now",
+        "ExpressionAttributeValues": {
+          ":stage": {
+            "S": "DRAFTING"
+          },
+          ":now": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.markerError",
           "Next": "GenerateObjectives"
         }
       ],

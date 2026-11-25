@@ -11,6 +11,7 @@ written to DIFFERENT tables, so learner-facing functions can never read answers.
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 import boto3
 
@@ -196,12 +197,14 @@ def handler(event, context):
     table(TABLE_NAME).update_item(
         Key=lesson_key,
         UpdateExpression=("SET objectivesStatus = :draft, objectiveCount = :n, generationModel = :m, "
-                          "inputTokens = :in, outputTokens = :out, GSI1PK = :drafts, GSI1SK = :sk, suggestedTitle = :st"),
+                          "inputTokens = :in, outputTokens = :out, GSI1PK = :drafts, GSI1SK = :sk, suggestedTitle = :st, "
+                          "stage = :stage, draftReadyAt = :at"),      # the creator's tracker: drafting finished
         ExpressionAttributeValues={
             ":draft": "DRAFT_READY", ":n": len(data["objectives"]), ":m": MODEL_ID,
             ":in": tokens_in, ":out": tokens_out, ":drafts": "DRAFTS",
             ":sk": f"{lesson['createdAt']}#{video_id}",
             ":st": str(data.get("suggestedTitle") or "").strip()[:120],   # the educator decides whether to use it
+            ":stage": "DRAFT_READY", ":at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
     )
     announce("LessonDraftReady", {"videoId": video_id, "title": lesson.get("title"), "objectiveCount": len(data["objectives"]),

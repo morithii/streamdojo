@@ -677,6 +677,36 @@ Resources:
   # ===========================================================================
 
   # ClipSensei: reads the transcript, drafts objectives + answer keys with Amazon Bedrock
+  # Live transcoding % for the creator's tracker: MediaConvert progress events (every 10 s) -> the lesson
+  TranscodeProgressFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub streamdojo-${Environment}-transcode-progress
+      CodeUri: src/transcode_progress/
+      Handler: app.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: SaveProgress             # only ever writes 3 progress fields, and only while PROCESSING
+              Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt AppTable.Arn
+      Events:
+        TranscodeProgress:
+          Type: EventBridgeRule             # MediaConvert sends job events to the default bus
+          Properties:
+            Pattern:
+              source: [aws.mediaconvert]
+              detail-type: [MediaConvert Job State Change]
+              detail:
+                status: [STATUS_UPDATE]
+                userMetadata:
+                  videoId: [{ exists: true }]   # only StreamDojo jobs carry a videoId
+
   # Safety check: summarises what Rekognition found and records CLEAN / FLAGGED / UNCHECKED on the lesson
   ModerationFunction:
     Type: AWS::Serverless::Function

@@ -218,7 +218,7 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .upload-head h3 { margin: 0; font-size: 1.05rem; }
 .upload-head .meta { margin: 0.2rem 0 0; }
 .upload-head .btn { margin-top: 0; }
-.steps { list-style: none; padding: 0; margin: 1.1rem 0 0; display: grid; grid-template-columns: repeat(5, 1fr); }
+.steps { list-style: none; padding: 0; margin: 1.1rem 0 0; display: grid; grid-template-columns: repeat(6, 1fr); }
 .step { position: relative; display: grid; justify-items: center; text-align: center; gap: 0.25rem; padding: 0 0.3rem; }
 .step::before {                       /* the line joining this step to the previous one */
   content: ""; position: absolute; top: 15px; right: 50%; width: 100%; height: 3px; background: var(--line); z-index: 0;
@@ -337,3 +337,18 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .flag-label { font-weight: 600; }
 .confirm-safety { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0.8rem 0; cursor: pointer; max-width: 46ch; }
 .confirm-safety input { width: 1.2rem; height: 1.2rem; margin-top: 0.15rem; accent-color: var(--accent); flex: none; }
+
+/* Exact pipeline progress on the creator page */
+.pipeline-now { margin: 0.9rem 0 0; font-size: 0.92rem; color: var(--muted); }
+.pipeline-now strong { color: var(--text); }
+.pipeline-now.done { color: var(--good); }
+.since { font-variant-numeric: tabular-nums; }
+.step.skip .dot { border-style: dashed; color: var(--muted); }
+.step.skip small { opacity: 0.8; }
+.step .bar { display: block; width: 100%; max-width: 9rem; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.step .bar span { display: block; height: 100%; background: var(--accent); transition: width 0.6s ease; }
+.langs { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; justify-content: center; }
+.lang { font-size: 0.7rem; padding: 0.05rem 0.4rem; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.lang.have { border-color: var(--accent); color: var(--text); }
+@media (max-width: 620px) { .langs { justify-content: start; } }
+@media (prefers-reduced-motion: reduce) { .step .bar span { transition: none; } }
