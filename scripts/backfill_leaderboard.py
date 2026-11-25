@@ -11,6 +11,11 @@ Usage (dry run first - it prints what it would write and changes nothing):
     python scripts/backfill_leaderboard.py --profile streamdojo --table streamdojo-dev
     python scripts/backfill_leaderboard.py --profile streamdojo --table streamdojo-dev --write
 
+If boto3 can't use your "aws login" profile (it needs botocore[crt]), hand it the credentials instead
+and leave --profile out - the script then uses the AWS_* environment variables:
+    eval "$(aws configure export-credentials --profile streamdojo --format env)"
+    python scripts/backfill_leaderboard.py --table streamdojo-dev
+
 Safe to run more than once: it SETs each row to the totals it counted (never adds on top).
 Run it soon after deploying, so few new attempts land between the count and the write.
 It uses a Scan - fine for a one-off admin job, never for an API request.
@@ -75,13 +80,13 @@ def write_rows(table, rows):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--profile", default="streamdojo")
+    parser.add_argument("--profile", default=None, help="AWS CLI profile (leave out to use AWS_* environment variables)")
     parser.add_argument("--region", default="eu-west-2")
     parser.add_argument("--table", default="streamdojo-dev")
     parser.add_argument("--write", action="store_true", help="actually write (default: dry run)")
     args = parser.parse_args()
 
-    table = boto3.Session(profile_name=args.profile, region_name=args.region).resource("dynamodb").Table(args.table)
+    table = boto3.Session(profile_name=args.profile, region_name=args.region)   # profile None -> environment variables.resource("dynamodb").Table(args.table)
     rows = build_rows(scan_user_items(table))
     for (course, sub), row in sorted(rows.items()):
         print(f"{course:20} {row.get('learnerName') or sub:20} {row['dojoPoints']:>5} pts  "
