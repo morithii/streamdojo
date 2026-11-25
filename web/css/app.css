@@ -382,3 +382,46 @@ a.btn { display: inline-block; text-decoration: none; margin-top: 1rem; }
 .session-score { font-size: 1.15rem; margin: 0.4rem 0 0.8rem; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .stars .star.on { animation: none; } }
+
+/* ---------------------------------------------------------------------------
+   Belts and gradings (grading.js)
+   --------------------------------------------------------------------------- */
+/* A belt: coloured bar with a knot; the label carries the meaning for screen readers and colour-blind users */
+.belt { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 0.85rem; }
+.belt-bar { position: relative; width: 2.6rem; height: 0.55rem; border-radius: 3px; background: var(--belt);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25); }
+.belt-bar .knot { position: absolute; left: 50%; top: 50%; width: 0.75rem; height: 0.95rem; transform: translate(-50%, -50%);
+  border-radius: 3px; background: var(--belt); box-shadow: 0 0 0 2px var(--panel), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.belt.big { font-size: 1.05rem; }
+.belt.big .belt-bar { width: 4rem; height: 0.8rem; }
+.belt.big .belt-bar .knot { width: 1.1rem; height: 1.4rem; }
+.course-card .belt { margin: 0.4rem 0; }
+
+/* The "Your belt" panel on a course page */
+.grading-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.3rem; margin: 1.5rem 0; }
+.grading-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.6rem 1.5rem; }
+.grading-head .eyebrow { margin: 0 0 0.4rem; }
+.requirements { list-style: none; padding: 0; margin: 1rem 0; display: grid; gap: 0.35rem; }
+.requirements li { color: var(--muted); }
+.requirements li::before { content: "○"; display: inline-block; width: 1.4rem; color: var(--muted); }
+.requirements li.met { color: var(--text); }
+.requirements li.met::before { content: "✓"; color: var(--good); font-weight: 800; }
+.grading-panel .last { margin-top: 0.8rem; }
+
+/* The exam */
+.grading { max-width: 52rem; margin: 0 auto; padding: 1.5rem clamp(1rem, 4vw, 2rem) 3rem; }
+.belt-step { display: flex; align-items: center; gap: 1rem; margin: 1rem 0; color: var(--muted); }
+.rules { color: var(--muted); padding-left: 1.2rem; margin: 1rem 0 1.5rem; }
+.rules li { margin: 0.3rem 0; }
+.exam-bar { display: flex; justify-content: space-between; gap: 1rem; color: var(--muted); font-weight: 600; }
+.clock { font-variant-numeric: tabular-nums; color: var(--text); }
+.exam-progress { margin: 0.5rem 0 1.5rem; }
+.exam-progress span { background: var(--accent); }
+.grading .prompt { margin: 0.3rem 0 0; }
+.grading .score h1 { margin: 0; font-size: 2.6rem; }
+.grading .score p { margin: 0.3rem 0 0.7rem; }
+.breakdown { padding-left: 1.2rem; display: grid; gap: 1.1rem; margin-bottom: 2rem; }
+.breakdown .points { list-style: none; padding: 0; display: grid; gap: 0.4rem; }
+.grading .score { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1.2rem; }
+.grading .score p { margin: 0; }
+.grading .sensei + h2 { margin-top: 2rem; }

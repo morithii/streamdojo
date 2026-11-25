@@ -85,8 +85,11 @@ def progress(user_id):
             if item.get("videoId"):
                 counts[item["videoId"]] = counts.get(item["videoId"], 0) + 1
         if "LastEvaluatedKey" not in page:
-            return response(200, {"practised": counts})
+            break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    # their karate belt in each course (no item yet = white belt)
+    belts = table().query(KeyConditionExpression=Key("PK").eq(f"USER#{user_id}") & Key("SK").begins_with("BELT#")).get("Items", [])
+    return response(200, {"practised": counts, "belts": {b["SK"].split("#", 1)[1]: b.get("belt", "WHITE") for b in belts}})
 
 
 def handler(event, context):

@@ -1,22 +1,24 @@
 // =============================================================================
 // Courses, Teachable/Thinkific style.
 //   #/                      My courses: one card per course with your progress
-//   #/course/<topicId>      the curriculum: lessons numbered 1, 2, 3... with ✓ when practised
+//   #/course/<topicId>      the curriculum: lessons numbered 1, 2, 3... with ✓ when practised,
+//                           plus your belt and the grading panel (see grading.js)
 // A course is a topic; lessons are in the order the API gives (educator position, then publish date).
 // "Complete" = practised with ClipSensei at least once - recall, not just watching, is the point.
 // =============================================================================
 import { el, formatDuration, sensei } from "./dom.js";
 import { api } from "./api.js";
+import { beltBadge, gradingPanel } from "./grading.js";
 
 const enc = encodeURIComponent;
 
 // Everything the course pages need, fetched together
 export async function loadCourses() {
-  const [{ rows }, { practised }] = await Promise.all([api("/catalogue"), api("/learn/progress")]);
+  const [{ rows }, { practised, belts = {} }] = await Promise.all([api("/catalogue"), api("/learn/progress")]);
   return rows.map((course) => {
     const lessons = course.lessons.map((l) => ({ ...l, done: Boolean(practised[l.videoId]) }));
     const doneCount = lessons.filter((l) => l.done).length;
-    return { ...course, lessons, doneCount, next: lessons.find((l) => !l.done) || lessons[0] };
+    return { ...course, lessons, doneCount, belt: belts[course.topicId] || "WHITE", next: lessons.find((l) => !l.done) || lessons[0] };
   });
 }
 
@@ -65,6 +67,7 @@ export async function renderHome(app, reviewsBanner) {
               el("div", { className: "course-body" },
                 el("h2", {}, course.topicName),
                 el("p", { className: "meta" }, lessonMeta(course)),
+                beltBadge(course.belt),
                 progressBar(course.doneCount, course.lessonCount),
                 el("span", { className: "btn" }, courseAction(course)),
               ),
@@ -92,7 +95,8 @@ export function curriculum(course, currentId) {
 }
 
 export async function renderCourse(app, topicId) {
-  const course = (await loadCourses()).find((c) => c.topicId === topicId);
+  const [courses, panel] = await Promise.all([loadCourses(), gradingPanel(topicId)]);
+  const course = courses.find((c) => c.topicId === topicId);
   if (!course) throw new Error("Course not found.");
   app.replaceChildren(
     el("section", { className: "courses" },
@@ -108,6 +112,7 @@ export async function renderCourse(app, topicId) {
         ),
         course.lessons[0].thumbnailUrl ? el("img", { src: course.lessons[0].thumbnailUrl, alt: "" }) : null,
       ),
+      panel || "",                                     // your belt + the way to the next grading
       el("h2", {}, "Course content"),
       curriculum(course),
     ),

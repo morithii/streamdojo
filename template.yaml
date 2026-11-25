@@ -990,6 +990,25 @@ Resources:
             RestApiId: !Ref StreamDojoApi
             Path: /learn/hint/{videoId}/{objectiveId}
             Method: get
+        # Grading (dojo exam + belts): same function, so the exam uses exactly the same ClipSensei marking
+        GradingStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/grading/{topicId}
+            Method: get
+        GradingStart:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/grading/{topicId}/start
+            Method: post
+        GradingAnswer:
+          Type: Api
+          Properties:
+            RestApiId: !Ref StreamDojoApi
+            Path: /learn/grading/{topicId}/answer
+            Method: post
 
   # ===========================================================================
   # Step 14: educator insights - read-only numbers + a ClipSensei summary
@@ -1243,7 +1262,7 @@ Resources:
             EventBusName: !Ref EventBus
             Pattern:
               source: [streamdojo]
-              detail-type: [LessonDraftReady, LessonPublished, LessonRejected, PracticeCompleted, LessonDeleted]
+              detail-type: [LessonDraftReady, LessonPublished, LessonRejected, PracticeCompleted, LessonDeleted, BeltAwarded]
             RetryPolicy:
               MaximumRetryAttempts: 3
               MaximumEventAgeInSeconds: 3600

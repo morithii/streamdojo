@@ -58,6 +58,11 @@ def educators():
 def describe(detail_type, d):
     """(recipients, message, link) for each kind of event. Unknown events notify nobody."""
     title = d.get("title") or "A lesson"
+    if detail_type == "BeltAwarded":
+        belt, course = str(d.get("belt", "")).title(), d.get("topicName") or "a course"
+        learner = d.get("learnerName") or "A learner"
+        return ([d.get("learnerSub")] + educators(), f"{learner} earned a {belt} belt in {course} ({d.get('score')}%).",
+                f"#/course/{d.get('topicId', '')}")
     if detail_type == "LessonDeleted":
         # Only worth telling the creator when SOMEONE ELSE (an educator) removed their video
         if not d.get("byEducator") or not d.get("creatorSub"):
@@ -81,16 +86,25 @@ def describe(detail_type, d):
     return [], "", ""
 
 
+def personal(detail_type, d, sub, message):
+    """The same event, worded for the person it's about: 'You earned...' instead of 'Sam earned...'."""
+    if detail_type == "BeltAwarded" and sub == d.get("learnerSub"):
+        return (f"🥋 You earned your {str(d.get('belt', '')).title()} belt in {d.get('topicName') or 'your course'} "
+                f"({d.get('score')}%). ClipSensei bows.")
+    return message
+
+
 def handler(event, context):
     detail_type, detail = event["detail-type"], event.get("detail", {})
     recipients, message, link = describe(detail_type, detail)
     created = event.get("time")                                  # when it happened, per EventBridge
     written = 0
     for sub in dict.fromkeys(r for r in recipients if r):        # de-duplicate, keep order
+        text = personal(detail_type, detail, sub, message)
         try:
             table().put_item(
                 Item={"PK": f"USER#{sub}", "SK": f"NOTIF#{created}#{event['id']}", "type": detail_type,
-                      "message": message[:300], "link": link, "read": False, "createdAt": created,
+                      "message": text[:300], "link": link, "read": False, "createdAt": created,
                       "expiresAt": int(time.time()) + KEEP_DAYS * 86400},        # DynamoDB TTL deletes it later
                 ConditionExpression="attribute_not_exists(PK)")
             written += 1

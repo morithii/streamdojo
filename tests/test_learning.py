@@ -174,6 +174,8 @@ def test_progress_counts_practised_ideas_per_lesson():
     class Pages:
         def __init__(self): self.calls = 0
         def query(self, **kwargs):
+            if "IndexName" not in kwargs:                    # the learner's belts: USER#u1 / BELT#<course>
+                return {"Items": [{"SK": "BELT#cloud", "belt": "GREEN"}]}
             self.calls += 1
             assert kwargs["IndexName"] == "GSI3" and "KeyConditionExpression" in kwargs
             if self.calls == 1:
@@ -184,7 +186,7 @@ def test_progress_counts_practised_ideas_per_lesson():
     pages = Pages()
     res = learn.handler({"httpMethod": "GET", "resource": "/learn/progress", "pathParameters": None,
                          "requestContext": {"authorizer": {"claims": {"sub": "u1", "cognito:groups": "learners"}}}}, None)
-    assert json.loads(res["body"]) == {"practised": {"v1": 2, "v2": 1}} and pages.calls == 2
+    assert json.loads(res["body"]) == {"practised": {"v1": 2, "v2": 1}, "belts": {"cloud": "GREEN"}} and pages.calls == 2
 
 
 class FakeEvents:

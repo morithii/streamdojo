@@ -84,6 +84,16 @@ def test_creator_is_told_when_an_educator_deletes_their_video_but_not_when_they_
     assert m._clients["table"].items == {}
 
 
+def test_a_new_belt_is_celebrated_for_the_learner_and_reported_to_educators():
+    m = notifier()
+    m.handler(event("BeltAwarded", {"learnerSub": "u9", "learnerName": "Sam", "topicId": "cloud",
+                                    "topicName": "Cloud Skills", "belt": "GREEN", "score": 74}), None)
+    by_user = {pk: item["message"] for (pk, _), item in m._clients["table"].items.items()}
+    assert by_user["USER#u9"].startswith("🥋 You earned your Green belt in Cloud Skills (74%)")
+    educator_messages = [msg for pk, msg in by_user.items() if pk != "USER#u9"]
+    assert educator_messages and all(msg == "Sam earned a Green belt in Cloud Skills (74%)." for msg in educator_messages)
+
+
 def test_duplicate_delivery_never_duplicates_a_notification():
     m = notifier()
     e = event("LessonRejected", {"videoId": "v1", "title": "AWS", "creatorSub": "c1", "reason": "Audio too quiet"})

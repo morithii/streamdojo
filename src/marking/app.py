@@ -26,10 +26,14 @@ Dojo stars and points (gamification):
 import json
 import os
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 
 import boto3
 from boto3.dynamodb.conditions import Key
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # Lambda has this folder on the path; tests don't
+from grading import Grading  # noqa: E402 - the dojo exam lives next door and reuses this file's marking
 
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 KEYS_TABLE_NAME = os.environ.get("KEYS_TABLE_NAME", "")
@@ -328,6 +332,12 @@ def submit_attempt(user_id, display_name, body):
     })
 
 
+class _ThisModule:
+    """A live view of this file for grading.py: table(), mark_with_clipsensei(), announce()... always current."""
+    def __getattr__(self, name):
+        return globals()[name]
+
+
 def handler(event, context):
     user_id, display_name, groups = caller(event)
     if not groups & {"learners", "educators", "creators"}:
@@ -341,4 +351,17 @@ def handler(event, context):
         except json.JSONDecodeError:
             return response(400, {"message": "Body must be valid JSON"})
         return submit_attempt(user_id, display_name, body)
+    # Grading (the dojo exam) - same marking, its own rules: see grading.py
+    if route.startswith(("GET /learn/grading/", "POST /learn/grading/")):
+        exam, topic_id, now = Grading(_ThisModule()), params.get("topicId", ""), utcnow()
+        if route == "GET /learn/grading/{topicId}":
+            return exam.status(user_id, topic_id, now)
+        try:
+            body = json.loads(event.get("body") or "{}")
+        except json.JSONDecodeError:
+            return response(400, {"message": "Body must be valid JSON"})
+        if route == "POST /learn/grading/{topicId}/start":
+            return exam.start(user_id, display_name, topic_id, now)
+        if route == "POST /learn/grading/{topicId}/answer":
+            return exam.answer(user_id, topic_id, body, now)
     return response(404, {"message": "Unknown route"})

@@ -4,6 +4,7 @@
 //   #/course/<topic>   a course's curriculum: lessons 1, 2, 3...
 //   #/watch/<id>       a lesson: player + course sidebar + previous/next
 //   #/practise/<id>    practise a lesson with ClipSensei (active recall)
+//   #/grading/<topic>  the belt grading for a course (see grading.js)
 //   #/reviews          today's spaced-repetition reviews
 //   #/create           upload lessons and follow them through the pipeline (see create.js)
 //   #/teach...         the educator dashboard (see teach.js)
@@ -13,6 +14,7 @@ import { api, setApiBase } from "./api.js";
 import { el, formatDuration, sensei } from "./dom.js";
 import { lessonPlayer, stopPlayer } from "./player.js";
 import { runPractice } from "./practice.js";
+import { renderGrading } from "./grading.js";
 import { renderTeach, renderReview, renderInsights } from "./teach.js";
 import { renderCreate } from "./create.js";
 import { renderHome, renderCourse, loadCourses, curriculum, progressBar, watchHref } from "./courses.js";
@@ -152,6 +154,7 @@ async function route() {
     if (page === "course" && id) return await renderCourse(app, decodeURIComponent(id));
     if (page === "watch" && id) return await renderWatch(decodeURIComponent(id));
     if (page === "practise" && id) return await renderPractise(decodeURIComponent(id));
+    if (page === "grading" && id) return await renderGrading(app, decodeURIComponent(id));
     if (page === "reviews") return await renderReviews();
     if (page === "teach" && id === "review" && sub) return await renderReview(app, decodeURIComponent(sub));
     if (page === "teach" && id === "insights" && sub) return await renderInsights(app, decodeURIComponent(sub));
