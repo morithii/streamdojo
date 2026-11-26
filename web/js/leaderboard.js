@@ -11,7 +11,7 @@
 // =============================================================================
 import { el, sensei } from "./dom.js";
 import { api } from "./api.js";
-import { beltBadge, beltName, BELTS } from "./grading.js";
+import { beltBadge, beltName, BELTS } from "./belt.js";
 
 const enc = encodeURIComponent;
 const HIDE_NAMES_KEY = "streamdojo.leaderboard.hideNames";
@@ -113,7 +113,7 @@ export async function renderLeaderboard(app, topicId) {
           ...[l.readyToGrade && "Ready to grade", l.fallingBehind && "Falling behind",
               l.failedLastGrading && `Failed ${beltName(l.lastGrading.targetBelt)} (${l.lastGrading.score}%)`]
             .filter(Boolean).map((tag) => el("span", { className: "tag" }, tag))),
-        el("td", {}, beltBadge(l.belt)),
+        el("td", {}, beltBadge(l.belt, { size: "sm" })),
         el("td", { className: "num" }, String(l.dojoPoints)),
         el("td", { className: "num" }, `${l.practised} / ${l.ideas}`),
         el("td", { className: `num ${l.overdueReviews ? "warn" : ""}` }, String(l.dueReviews)),
@@ -137,7 +137,7 @@ export async function renderLeaderboard(app, topicId) {
     ),
     el("div", { className: "belt-strip", ariaLabel: "Learners per belt" },
       ...BELTS.map((belt) => el("div", { className: `belt-count ${counts[belt] ? "" : "zero"}` },
-        beltBadge(belt), el("strong", {}, String(counts[belt] || 0))))),
+        beltBadge(belt, { size: "sm" }), el("strong", {}, String(counts[belt] || 0))))),
     filterBar,
     tableArea,
   ));

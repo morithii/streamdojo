@@ -1,6 +1,6 @@
 // =============================================================================
 // Gradings: the belt exam for a whole course (one belt per grading).
-//   beltBadge(belt)            a small coloured belt, used on course cards and pages
+//   (the belt itself is drawn by belt.js - one component everywhere)
 //   gradingPanel(topicId)      the "Your belt" box on a course page: eligibility, cooldown, start button
 //   #/grading/<topicId>        the exam itself: rules -> one question at a time -> result + sensei verdict
 // The API (src/marking/grading.py) decides everything that matters - eligibility, timing,
@@ -13,24 +13,9 @@ import { api } from "./api.js";
 
 const enc = encodeURIComponent;
 
-// Belt order and colours - same order as BELTS in grading.py
-export const BELTS = ["WHITE", "YELLOW", "ORANGE", "GREEN", "BLUE", "BROWN", "BLACK"];
-const BELT_COLOUR = {
-  WHITE: "#f4f4f4", YELLOW: "#f5d547", ORANGE: "#f39a3b", GREEN: "#3fae5a",
-  BLUE: "#3b7dd8", BROWN: "#8a5a3b", BLACK: "#111111",
-};
-
-// "GREEN" -> "Green"
-export const beltName = (belt) => belt ? belt.charAt(0) + belt.slice(1).toLowerCase() : "";
-
-// A small belt: a coloured bar with a knot. The text label keeps it readable without colour.
-export function beltBadge(belt = "WHITE", size = "small") {
-  return el("span", { className: `belt ${size}`, title: `${beltName(belt)} belt` },
-    el("span", { className: "belt-bar", style: `--belt: ${BELT_COLOUR[belt] || BELT_COLOUR.WHITE}`, ariaHidden: "true" },
-      el("span", { className: "knot" })),
-    el("span", { className: "belt-label" }, `${beltName(belt)} belt`),
-  );
-}
+// Belts are drawn by ONE shared component (belt.js); re-exported here for older imports
+export { BELTS, beltName, beltBadge } from "./belt.js";
+import { beltName, beltBadge, beltButton } from "./belt.js";
 
 // "2026-11-28T09:00:00Z" -> "Sat 28 Nov, 09:00" in the learner's own time zone
 function when(iso) {
@@ -50,7 +35,8 @@ export async function gradingPanel(topicId) {
   const { ideas, practised, remembered } = status.requirements;
   const box = el("div", { className: "grading-panel" },
     el("div", { className: "grading-head" },
-      el("div", {}, el("p", { className: "eyebrow" }, "Your belt"), beltBadge(status.belt, "big")),
+      el("div", {}, el("p", { className: "eyebrow" }, "Your belt"),
+        beltButton(status.belt, topicId, { size: "md", topicName: status.topicName })),   // tap: full progress
       status.nextBelt
         ? el("p", { className: "meta" }, `Next: ${beltName(status.nextBelt)} belt · pass mark ${status.passMark}% · ${status.questionCount} questions · 60 minutes`)
         : el("p", { className: "meta" }, "Black belt. ClipSensei has nothing left to grade here."),
@@ -119,7 +105,7 @@ export async function renderGrading(app, topicId) {
       el("div", {}, el("p", { className: "eyebrow" }, "Grading"), el("h1", {}, status.topicName)),
       sensei(`Show me what you remember. ${status.passMark}% earns the ${beltName(status.nextBelt)} belt.`),
     ),
-    el("div", { className: "belt-step" }, beltBadge(status.belt, "big"), el("span", { ariaHidden: "true" }, "→"), beltBadge(status.nextBelt, "big")),
+    el("div", { className: "belt-step" }, beltBadge(status.belt, { size: "lg" }), el("span", { ariaHidden: "true" }, "→"), beltBadge(status.nextBelt, { size: "lg" })),
     el("ul", { className: "rules" },
       el("li", {}, `${status.questionCount} questions from across the whole course, one at a time.`),
       el("li", {}, "60 minutes from when you start. Unanswered questions score zero."),
@@ -205,7 +191,7 @@ function showResult(app, topicId, result, back) {
     el("div", { className: `score ${result.passed ? "good" : ""}` },
       el("h1", {}, `${result.score}%`),
       el("p", {}, headline),
-      result.passed ? beltBadge(result.targetBelt, "big") : el("p", { className: "meta" }, "You can grade again in 3 days. Your reviews will get you there."),
+      result.passed ? beltBadge(result.targetBelt, { size: "lg" }) : el("p", { className: "meta" }, "You can grade again in 3 days. Your reviews will get you there."),
     ),
     sensei(result.verdict || (result.passed ? "Well earned." : "Keep training."), "big"),
     el("h2", {}, "Question by question"),

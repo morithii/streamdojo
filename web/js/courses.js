@@ -8,7 +8,8 @@
 // =============================================================================
 import { el, formatDuration, sensei } from "./dom.js";
 import { api } from "./api.js";
-import { beltBadge, gradingPanel } from "./grading.js";
+import { gradingPanel } from "./grading.js";
+import { beltButton } from "./belt.js";
 
 const enc = encodeURIComponent;
 
@@ -62,12 +63,14 @@ export async function renderHome(app, reviewsBanner) {
       reviewsBanner(reviews) || "",
       courses.length
         ? el("div", { className: "course-grid" }, ...courses.map((course) =>
-            el("a", { className: "course-card", href: `#/course/${enc(course.topicId)}` },
+            // The card is an <article>; the course title is the link and stretches over the whole card
+            // (CSS ::after), so the card still clicks as one - while the belt can be its own button.
+            el("article", { className: "course-card" },
               course.lessons[0].thumbnailUrl ? el("img", { src: course.lessons[0].thumbnailUrl, alt: "" }) : el("div", { className: "thumb-missing" }),
               el("div", { className: "course-body" },
-                el("h2", {}, course.topicName),
+                el("h2", {}, el("a", { className: "card-link", href: `#/course/${enc(course.topicId)}` }, course.topicName)),
                 el("p", { className: "meta" }, lessonMeta(course)),
-                beltBadge(course.belt),
+                beltButton(course.belt, course.topicId, { size: "sm", topicName: course.topicName }),
                 progressBar(course.doneCount, course.lessonCount),
                 el("span", { className: "btn" }, courseAction(course)),
               ),
